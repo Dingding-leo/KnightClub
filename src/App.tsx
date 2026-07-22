@@ -1370,6 +1370,7 @@ export default function App() {
       ctrlKey: event.ctrlKey,
       altKey: event.altKey,
       editable,
+      modalOpen: Boolean(decision),
     })
     if (!shortcut) return
     event.preventDefault()

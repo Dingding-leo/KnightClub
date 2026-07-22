@@ -12,7 +12,9 @@
 - Original local Tactics Sprint: a three-position immediate practice path with no initial answer/PV exposure, local legal replay, two-stage hints, explicit reveal, reset and terminal outcome metrics
 - Bounded tactics progress plus immutable-attempt persistence in browser storage and SQLite schema v5, with deterministic reconciliation and atomic native attempt/progress recording
 - Explicit Review waiting state while a live bot move owns the local engine
-- Cancellable full-game Stockfish review with before/after searches, live ply progress and a safe Stop action
+- Cancellable full-game Stockfish review with intermediate-position reuse, live ply progress and a safe Stop action
+- Full-game review now avoids duplicate Stockfish work by reusing each intermediate post-move MultiPV result for the next move's baseline while retaining a single-PV final after check and rules-layer terminal handling
+- Decision dialogs now block Play shortcuts behind the modal while preserving Escape-to-cancel
 - Original nonlinear expected-score accuracy model with overall, White/Black, ACPL and best-move metrics
 - Contextual move classifications using legal-move uniqueness, PV identity/gap, missed mate and decisive reversals
 - Ranked turning points, per-move badges and concrete selected-move feedback with a stronger SAN continuation

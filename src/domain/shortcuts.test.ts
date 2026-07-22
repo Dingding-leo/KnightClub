@@ -17,4 +17,12 @@ describe('gameShortcutFor', () => {
     expect(gameShortcutFor({ key: 'z' })).toBeNull()
     expect(gameShortcutFor({ key: 'u', altKey: true })).toBeNull()
   })
+
+  it('does not let play shortcuts pass through an open decision dialog', () => {
+    expect(gameShortcutFor({ key: 'n', modalOpen: true })).toBeNull()
+    expect(gameShortcutFor({ key: 'u', modalOpen: true })).toBeNull()
+    expect(gameShortcutFor({ key: 'f', modalOpen: true })).toBeNull()
+    expect(gameShortcutFor({ key: 'z', metaKey: true, modalOpen: true })).toBeNull()
+    expect(gameShortcutFor({ key: 'z', ctrlKey: true, modalOpen: true })).toBeNull()
+  })
 })

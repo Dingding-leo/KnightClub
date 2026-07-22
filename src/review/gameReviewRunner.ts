@@ -45,20 +45,28 @@ export async function runGameReview(
   let totalElapsedMs = 0
 
   onProgress?.({ completedPly: 0, totalPly: timeline.moves.length, stage: 'before' })
+  assertActive(signal)
+  // The position after one ply is the position before the next one. Retain
+  // that richer MultiPV result for intermediate positions so a full review
+  // does not make an extra UCI search just to obtain the prior move's after
+  // evaluation. The final non-terminal after-position still needs only PV1.
+  let before = await analyze(timeline.positions[0].fen, beforeSettings)
+  assertActive(signal)
+  totalElapsedMs += before.elapsedMs
+
   for (const [index, move] of timeline.moves.entries()) {
     assertActive(signal)
     const preFen = timeline.positions[index].fen
     const postFen = timeline.positions[index + 1].fen
-    const before = await analyze(preFen, beforeSettings)
-    assertActive(signal)
     onProgress?.({ completedPly: index, totalPly: timeline.moves.length, stage: 'after' })
     const terminal = new Chess(postFen).isGameOver()
-    const after = terminal ? null : await analyze(postFen, afterSettings)
+    const hasNextMove = index < timeline.moves.length - 1
+    const after = terminal ? null : await analyze(postFen, hasNextMove ? beforeSettings : afterSettings)
     assertActive(signal)
 
     engineName ||= before.engineName
     enginePath ||= before.enginePath
-    totalElapsedMs += before.elapsedMs + (after?.elapsedMs ?? 0)
+    totalElapsedMs += after?.elapsedMs ?? 0
     reviewed.push(classifyReviewedMove({
       ...move,
       preFen,
@@ -67,6 +75,11 @@ export async function runGameReview(
       afterLine: after?.lines[0] ?? null,
     }))
     onProgress?.({ completedPly: index + 1, totalPly: timeline.moves.length, stage: 'before' })
+
+    if (index < timeline.moves.length - 1) {
+      if (!after) throw new Error('Review timeline contains a move after a terminal position.')
+      before = after
+    }
   }
 
   return {

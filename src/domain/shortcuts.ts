@@ -6,10 +6,11 @@ export interface ShortcutInput {
   ctrlKey?: boolean
   altKey?: boolean
   editable?: boolean
+  modalOpen?: boolean
 }
 
 export function gameShortcutFor(input: ShortcutInput): GameShortcut | null {
-  if (input.editable || input.altKey) return null
+  if (input.editable || input.altKey || input.modalOpen) return null
   const key = input.key.toLowerCase()
   const command = Boolean(input.metaKey || input.ctrlKey)
 
