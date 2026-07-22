@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Chess } from 'chess.js'
-import { cloneGame, evaluateMaterial, gameResult, gameStatus } from './chess'
+import { cloneGame, cloneGameAtPly, evaluateMaterial, gameResult, gameStatus } from './chess'
 
 describe('chess domain', () => {
   it('clones move history and current position', () => {
@@ -24,6 +24,22 @@ describe('chess domain', () => {
     expect(fromSnapshot.fen()).toBe(fallback.fen())
     expect(fromSnapshot.history()).toEqual(fallback.history())
     expect(fromSnapshot.pgn()).toBe(fallback.pgn())
+  })
+
+  it('rebuilds a bounded historical position from cached moves without changing a custom-start game', () => {
+    const startFen = '4k3/8/8/8/8/8/8/4K3 w - - 0 1'
+    const game = new Chess(startFen)
+    game.move('Kd2')
+    game.move('Kd7')
+    const verbose = game.history({ verbose: true })
+
+    const preview = cloneGameAtPly(game, startFen, verbose, 1)
+
+    expect(preview.history()).toEqual(['Kd2'])
+    expect(preview.fen()).toBe('4k3/8/8/8/8/8/3K4/8 b - - 1 1')
+    expect(game.history()).toEqual(['Kd2', 'Kd7'])
+    expect(cloneGameAtPly(game, startFen, verbose, -1).fen()).toBe(startFen)
+    expect(cloneGameAtPly(game, startFen, verbose, 99).history()).toEqual(game.history())
   })
 
   it('evaluates captured material from white perspective', () => {

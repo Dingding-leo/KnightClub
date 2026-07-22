@@ -76,11 +76,22 @@ describe('board convenience contracts', () => {
 })
 
 describe('move history convenience contracts', () => {
-  it('announces updates and identifies the latest row', () => {
-    const markup = renderToStaticMarkup(<MoveList moves={['e4', 'e5', 'Nf3']} />)
+  it('renders clickable SAN controls and identifies the currently displayed position', () => {
+    const markup = renderToStaticMarkup(
+      <MoveList
+        moves={['e4', 'e5', 'Nf3']}
+        activePly={1}
+        followingLatest={false}
+        onSelectPly={vi.fn()}
+      />,
+    )
 
     expect(markup).toContain('aria-live="polite"')
     expect(markup).toContain('aria-current="step"')
+    expect(markup).toContain('aria-pressed="true"')
+    expect(markup).toContain('aria-label="View position after 1. e4"')
+    expect(markup).toContain('aria-label="View position after 1... e5"')
+    expect(markup).toContain('aria-label="View position after 2. Nf3"')
     expect(markup).toContain('Nf3')
   })
 })

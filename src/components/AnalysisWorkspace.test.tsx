@@ -3,11 +3,15 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   AnalysisWorkspace,
   CoachEvidenceCard,
+  RetryPracticeButton,
+  RetrySaveNotice,
   ReviewSaveNotice,
 } from './AnalysisWorkspace'
 import type { CoachGuidance } from '../review/coach'
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { PersistedReview } from '../review/reviewPersistence'
+import type { RetryItem } from '../review/retry'
+import { saveRetryItemsSerially } from '../review/retryQueuePersistence'
 import { evidenceSquaresForGuidance, reviewNavigationForKey, reviewPlyAfter } from '../review/reviewWorkspaceUtils'
 
 function deferred<T>() {
@@ -21,6 +25,31 @@ function deferred<T>() {
 }
 
 const persistedReview = { reviewKey: '0123456789abcdef' } as PersistedReview
+
+function retryItem(retryKey: string): RetryItem {
+  return {
+    schemaVersion: 1,
+    retryKey,
+    reviewKey: '0123456789abcdef',
+    sourcePly: 4,
+    preFen: 'rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2',
+    sideToMove: 'b',
+    playedMoveUci: 'a7a6',
+    playedMoveSan: 'a6',
+    solutionUci: 'd8h4',
+    solutionSan: 'Qh4#',
+    solutionLineSan: ['Qh4#'],
+    classification: 'blunder',
+    focus: 'Check forcing moves before committing to a quiet move.',
+    status: 'active',
+    attemptCount: 0,
+    correctStreak: 0,
+    dueAt: '2026-07-22T00:00:00.000Z',
+    lastAttemptAt: null,
+    createdAt: '2026-07-22T00:00:00.000Z',
+    updatedAt: '2026-07-22T00:00:00.000Z',
+  }
+}
 
 describe('analysis workspace convenience contracts', () => {
   it('makes browser Stockfish analysis and replay available without the desktop runtime', () => {
@@ -189,6 +218,66 @@ describe('full-review background persistence', () => {
       onSaved: () => { throw new Error('library callback failed') },
       onFailed: () => { throw new Error('failure callback failed') },
     })).resolves.toBeUndefined()
+  })
+})
+
+describe('review-to-train handoff feedback', () => {
+  it('changes the active practice label, announces progress, and disables both actions while saving', () => {
+    const markup = renderToStaticMarkup(
+      <>
+        <RetryPracticeButton action="batch" savingAction="batch" onClick={() => undefined} />
+        <RetryPracticeButton action="single" savingAction="batch" onClick={() => undefined} />
+        <RetrySaveNotice action="batch" />
+      </>,
+    )
+
+    expect(markup).toContain('Preparing key moments…')
+    expect(markup).toContain('Practice this position')
+    expect(markup).toContain('Preparing key moments for your training queue on this device…')
+    expect(markup).toContain('role="status"')
+    expect(markup).toContain('aria-live="polite"')
+    expect(markup).toContain('aria-busy="true"')
+    expect(markup.match(/disabled=""/g)).toHaveLength(2)
+  })
+
+  it('keeps an earlier saved moment visible when a later serial write fails', async () => {
+    const first = retryItem('0123456789abcdef:4')
+    const second = retryItem('0123456789abcdef:6')
+    const failure = new Error('storage is full')
+    const events: string[] = []
+    const onRetriesSaved = vi.fn((items: RetryItem[]) => {
+      events.push(`published:${items[0].retryKey}`)
+    })
+    const onOpenRetryQueue = vi.fn((retryKey: string) => {
+      events.push(`open:${retryKey}`)
+    })
+
+    const result = await saveRetryItemsSerially({
+      items: [first, second],
+      retryStore: {
+        load: async (retryKey) => {
+          events.push(`load:${retryKey}`)
+          return null
+        },
+        save: async (item) => {
+          events.push(`save:${item.retryKey}`)
+          if (item.retryKey === second.retryKey) throw failure
+        },
+      },
+      onRetriesSaved,
+      onOpenRetryQueue,
+    })
+
+    expect(result.saved).toEqual([first])
+    expect(result.error).toBe(failure)
+    expect(events).toEqual([
+      `load:${first.retryKey}`,
+      `save:${first.retryKey}`,
+      `published:${first.retryKey}`,
+      `load:${second.retryKey}`,
+      `save:${second.retryKey}`,
+    ])
+    expect(onOpenRetryQueue).not.toHaveBeenCalled()
   })
 })
 

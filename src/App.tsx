@@ -41,6 +41,7 @@ import { MoveList } from './components/MoveList'
 import type { TacticsSprintResult } from './components/TacticsSprint'
 import {
   cloneGame,
+  cloneGameAtPly,
   completedPgn,
   evaluateMaterial,
   formatEvaluation,
@@ -411,6 +412,9 @@ export default function App() {
   const [selected, setSelected] = useState<Square | null>(null)
   const [promotion, setPromotion] = useState<Promotion | null>(null)
   const [premove, setPremove] = useState<QueuedPremove | null>(null)
+  // A preview is strictly display state. The live game, clock and any queued
+  // premove keep running underneath it until the player returns to live.
+  const [previewPly, setPreviewPly] = useState<number | null>(null)
   const [thinking, setThinking] = useState(false)
   const [notice, setNotice] = useState('')
   const [transferNotice, setTransferNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null)
@@ -481,6 +485,12 @@ export default function App() {
 
   const verbose = useMemo(() => game.history({ verbose: true }), [game])
   const history = useMemo(() => verbose.map((move) => move.san), [verbose])
+  const previewing = previewPly !== null
+  const previewGame = useMemo(
+    () => previewPly === null ? game : cloneGameAtPly(game, startFen, verbose, previewPly),
+    [game, previewPly, startFen, verbose],
+  )
+  const previewMove = previewPly === null ? null : verbose[previewPly - 1] ?? null
   const tacticProgress = useMemo(
     () => tacticsStateToTacticProgress(tacticsState, SEED_TACTICS),
     [tacticsState],
@@ -489,6 +499,10 @@ export default function App() {
   const lastMove = useMemo(
     () => last ? { from: last.from, to: last.to } : null,
     [last],
+  )
+  const previewLastMove = useMemo(
+    () => previewMove ? { from: previewMove.from, to: previewMove.to } : null,
+    [previewMove],
   )
   const meta = pageMeta[tab]
   const topColor = orientation === 'white' ? 'black' : 'white'
@@ -524,13 +538,17 @@ export default function App() {
     if (premoveWindow) return new Set<Square>(queueablePremoveTargets(game, humanColor, selected))
     return new Set<Square>()
   }, [game, humanColor, mode, premoveWindow, selected])
-  const boardDisabled = gameFinished
+  const previewTargets = useMemo(() => new Set<Square>(), [])
+  const boardDisabled = previewing
+    || gameFinished
     || !clock.activeColor
     || Boolean(decision)
     || Boolean(promotion)
     || (!isHumanTurn(mode, game.turn(), humanColor) && !premoveWindow)
     || (thinking && !premoveWindow)
-  const canUndo = !gameFinished && (mode !== 'bot' || verbose.some((move) => move.color === humanColor))
+  const canUndo = !previewing
+    && !gameFinished
+    && (mode !== 'bot' || verbose.some((move) => move.color === humanColor))
   const currentStatus = termination?.status ?? gameStatus(game)
   const currentResult = termination?.result ?? gameResult(game)
   const livePgn = useMemo(() => game.pgn(), [game])
@@ -544,6 +562,19 @@ export default function App() {
     setupAutoCollapsed.current = true
     setSetupOpen(false)
   }, [history.length])
+
+  const selectPreviewPly = useCallback((ply: number) => {
+    if (!Number.isInteger(ply) || ply < 1 || ply > verbose.length) return
+    // The final move already is the live position, so it is the natural
+    // keyboard and pointer shortcut back to the game.
+    setSelected(null)
+    setPromotion(null)
+    setPreviewPly(ply === verbose.length ? null : ply)
+  }, [verbose.length])
+
+  const returnToLive = useCallback(() => {
+    setPreviewPly(null)
+  }, [])
 
   const reportTransfer = (ok: boolean, success: string, failure: string) => {
     setTransferNotice({ kind: ok ? 'success' : 'error', message: ok ? success : failure })
@@ -914,7 +945,7 @@ export default function App() {
     botClient.current?.cancel()
     clearPremove()
     openFreshGameSetup()
-    setGame(next); setStartFen(nextStartFen); setSelected(null); setPromotion(null)
+    setGame(next); setStartFen(nextStartFen); setPreviewPly(null); setSelected(null); setPromotion(null)
     setClock(newClock(control, next.turn())); setClockHistory([]); setTermination(null); setDecision(null)
     savedPosition.current = null; clearPersistedSession(); setThinking(false); setNotice(message)
   }
@@ -1218,7 +1249,7 @@ export default function App() {
           botRequestVersion.current += 1
           botClient.current?.cancel()
           clearPremove()
-          setGame(next); setStartFen(restoredStartFen)
+          setGame(next); setStartFen(restoredStartFen); setPreviewPly(null)
           customTimeDraft.current = customTimeDraftFor(control)
           setCustomTimeOpen(control.category === 'custom')
           setTimeControl(control); setClock(next.isGameOver() || restoredTermination ? pauseClock(restoredClock, now) : restoredClock)
@@ -1264,6 +1295,11 @@ export default function App() {
     })
     if (!shortcut) return
     event.preventDefault()
+    if (previewing && shortcut === 'undo') return
+    if (previewing && shortcut === 'cancel') {
+      returnToLive()
+      return
+    }
     if (shortcut === 'new-game') reset()
     if (shortcut === 'undo' && canUndo) undo()
     if (shortcut === 'flip') setOrientation((current) => current === 'white' ? 'black' : 'white')
@@ -1320,7 +1356,7 @@ export default function App() {
         botRequestVersion.current += 1
         botClient.current?.cancel()
         clearPremove()
-        setGame(restored.game); setStartFen(restored.startFen); setMode(restored.mode)
+        setGame(restored.game); setStartFen(restored.startFen); setPreviewPly(null); setMode(restored.mode)
         setBotLevel(restored.botLevel); setBotProfileId(restored.botProfileId); setOrientation(restored.orientation)
         setHumanColor(restored.humanColor); setColorChoice(restored.colorChoice)
         customTimeDraft.current = customTimeDraftFor(restored.timeControl)
@@ -1637,12 +1673,20 @@ export default function App() {
           <section className="play-workspace">
             <div className="board-stage">
               <div className="board-status">
-                <div><span>{premoveWindow ? `${opponentName} is thinking — queue one premove.` : currentStatus}</span><strong>Material {formatEvaluation(evaluateMaterial(game, 'w'))}</strong></div>
-                <button className="icon-button" type="button" onClick={() => setOrientation(orientation === 'white' ? 'black' : 'white')} title="Flip board">
-                  <FlipHorizontal2 size={18} /><span>Flip</span>
-                </button>
+                <div className="board-status__summary">
+                  <span>{previewing
+                    ? `Viewing after ${previewMove?.san ?? 'the selected move'} — read-only`
+                    : premoveWindow ? `${opponentName} is thinking — queue one premove.` : currentStatus}</span>
+                  <strong>Material {formatEvaluation(evaluateMaterial(previewGame, 'w'))}</strong>
+                </div>
+                <div className="board-status__actions">
+                  {previewing && <button className="board-return-live" type="button" onClick={returnToLive}>Return to live</button>}
+                  <button className="icon-button" type="button" onClick={() => setOrientation(orientation === 'white' ? 'black' : 'white')} title="Flip board">
+                    <FlipHorizontal2 size={18} /><span>Flip</span>
+                  </button>
+                </div>
               </div>
-              {premove && (
+              {premove && !previewing && (
                 <div className="premove-status" role="status">
                   <span><RefreshCw size={14} aria-hidden="true" />Premove queued <strong>{premove.from} → {premove.to}</strong></span>
                   <button type="button" onClick={() => { clearPremove(); setNotice('Premove cleared.') }}>Cancel premove <kbd>Esc</kbd></button>
@@ -1659,14 +1703,14 @@ export default function App() {
                 paused={Boolean(clock.pausedColor)}
               />
               <ChessBoard
-                game={game}
+                game={previewGame}
                 orientation={orientation}
-                selected={selected}
-                legalTargets={targets}
-                lastMove={lastMove}
-                interactionColor={premoveWindow ? humanColor : null}
-                premove={premove}
-                premoveMode={premoveWindow}
+                selected={previewing ? null : selected}
+                legalTargets={previewing ? previewTargets : targets}
+                lastMove={previewing ? previewLastMove : lastMove}
+                interactionColor={previewing || !premoveWindow ? null : humanColor}
+                premove={previewing ? null : premove}
+                premoveMode={!previewing && premoveWindow}
                 disabled={boardDisabled}
                 onSquareClick={onPlayBoardSquareClick}
                 onMoveAttempt={onPlayBoardMoveAttempt}
@@ -1827,17 +1871,22 @@ export default function App() {
                 )}
               </details>
               <div className="completion-actions" aria-label="Game completion actions">
-                <button type="button" onClick={offerDraw} disabled={gameFinished || (mode === 'bot' && (thinking || !isHumanTurn(mode, game.turn(), humanColor)))}>
+                <button type="button" onClick={offerDraw} disabled={previewing || gameFinished || (mode === 'bot' && (thinking || !isHumanTurn(mode, game.turn(), humanColor)))}>
                   <Handshake size={16} /><span>Offer draw</span>
                 </button>
-                <button type="button" onClick={() => openDecision('resign')} disabled={gameFinished}>
+                <button type="button" onClick={() => openDecision('resign')} disabled={previewing || gameFinished}>
                   <Flag size={16} /><span>Resign</span>
                 </button>
               </div>
 
               <section className="game-panel__moves">
-                <div className="section-heading"><div><span className="eyebrow">Notation</span><h3>Moves</h3></div><span>{history.length ? `${history.length} ply` : 'Ready'}</span></div>
-                <MoveList moves={history} />
+                <div className="section-heading"><div><span className="eyebrow">Notation</span><h3>Moves</h3></div><span>{previewing ? `Viewing ply ${previewPly} of ${history.length}` : history.length ? `${history.length} ply` : 'Ready'}</span></div>
+                <MoveList
+                  moves={history}
+                  activePly={previewPly ?? history.length}
+                  followingLatest={!previewing}
+                  onSelectPly={selectPreviewPly}
+                />
               </section>
 
               {gameFinished && (

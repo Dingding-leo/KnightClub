@@ -32,6 +32,22 @@ export function cloneGame(
   return clone
 }
 
+/**
+ * Rebuild a read-only historical position without mutating the live game.
+ * Supplying the cached verbose history keeps previewing a move list from
+ * repeatedly asking chess.js to derive the same timeline.
+ */
+export function cloneGameAtPly(
+  game: Chess,
+  startFen: string,
+  verboseHistory: readonly Move[],
+  ply: number,
+): Chess {
+  const requestedPly = Number.isFinite(ply) ? Math.trunc(ply) : 0
+  const boundedPly = Math.max(0, Math.min(verboseHistory.length, requestedPly))
+  return cloneGame(game, startFen, verboseHistory.slice(0, boundedPly))
+}
+
 export function evaluateMaterial(game: Chess, perspective: Color = 'w'): number {
   let score = 0
   for (const rank of game.board()) {

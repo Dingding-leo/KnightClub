@@ -45,6 +45,7 @@ import type { MoveClassification, ReviewedMove } from '../review/reviewModel'
 import { buildCoachGuidanceFromTimeline, type CoachGuidance } from '../review/coach'
 import { evidenceSquaresForGuidance, reviewNavigationForKey, reviewPlyAfter } from '../review/reviewWorkspaceUtils'
 import { createRetryItem, type RetryItem } from '../review/retry'
+import { saveRetryItemsSerially } from '../review/retryQueuePersistence'
 import {
   createPersistedReview,
   createReviewKey,
@@ -99,6 +100,47 @@ interface AnalysisMoveListProps {
 export function ReviewSaveNotice({ saving }: { saving: boolean }) {
   if (!saving) return null
   return <p className="review-retained" role="status">Saving review privately on this device…</p>
+}
+
+type RetrySaveAction = 'batch' | 'single'
+
+interface RetryPracticeButtonProps {
+  action: RetrySaveAction
+  savingAction: RetrySaveAction | null
+  className?: string
+  onClick: () => void
+}
+
+export function RetrySaveNotice({ action }: { action: RetrySaveAction | null }) {
+  if (!action) return null
+  const target = action === 'batch' ? 'key moments' : 'this position'
+  return <p className="review-retained" role="status" aria-live="polite">Preparing {target} for your training queue on this device…</p>
+}
+
+export function RetryPracticeButton({
+  action,
+  savingAction,
+  className,
+  onClick,
+}: RetryPracticeButtonProps) {
+  const saving = savingAction !== null
+  const active = savingAction === action
+  const label = active
+    ? action === 'batch' ? 'Preparing key moments…' : 'Preparing this position…'
+    : action === 'batch' ? 'Practice key moments' : 'Practice this position'
+
+  return (
+    <button
+      className={className}
+      type="button"
+      disabled={saving}
+      aria-busy={active}
+      onClick={onClick}
+    >
+      {active ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlayCircle size={15} aria-hidden="true" />}
+      {label}
+    </button>
+  )
 }
 
 const effortOptions = {
@@ -244,7 +286,7 @@ export function AnalysisWorkspace({
   const [reviewError, setReviewError] = useState('')
   const [reviewHydrating, setReviewHydrating] = useState(false)
   const [reviewOrigin, setReviewOrigin] = useState<'saved' | 'restored' | null>(null)
-  const [retrySaving, setRetrySaving] = useState(false)
+  const [retrySavingAction, setRetrySavingAction] = useState<RetrySaveAction | null>(null)
   const [retryError, setRetryError] = useState('')
   const client = useRef<StockfishAnalysisClient | null>(null)
   const reviewClient = useRef<StockfishAnalysisClient | null>(null)
@@ -299,6 +341,7 @@ export function AnalysisWorkspace({
     }
     return items
   }, [review, reviewKey, timeline])
+  const retrySaving = retrySavingAction !== null
   const moveRows = useMemo(
     () => {
       const rows = new Map<number, AnalysisMoveRow>()
@@ -698,34 +741,27 @@ export function AnalysisWorkspace({
     }
   }
 
-  const queueRetryItems = async (items: RetryItem[]) => {
+  const queueRetryItems = async (items: RetryItem[], action: RetrySaveAction) => {
     if (!retryStore || retrySaving || !items.length) return
-    setRetrySaving(true)
+    setRetrySavingAction(action)
     setRetryError('')
-    const saved: RetryItem[] = []
     try {
-      for (const item of items) {
-        const existing = await retryStore.load(item.retryKey)
-        const retained = existing ?? item
-        if (!existing) {
-          await retryStore.save(item)
-        }
-        saved.push(retained)
-        // Preserve each completed write in the visible queue. A later item can
-        // fail independently without making an earlier saved practice moment
-        // disappear from Train until a reload.
-        onRetriesSaved?.([retained])
-      }
-      onOpenRetryQueue?.(saved[0].retryKey)
-    } catch (error) {
-      const savedPrefix = saved.length
-        ? `${saved.length} practice ${saved.length === 1 ? 'moment is' : 'moments are'} ready, but `
+      const result = await saveRetryItemsSerially({
+        items,
+        retryStore,
+        onRetriesSaved,
+        onOpenRetryQueue,
+      })
+      if (result.error) {
+        const savedPrefix = result.saved.length
+          ? `${result.saved.length} practice ${result.saved.length === 1 ? 'moment is' : 'moments are'} ready, but `
         : ''
-      setRetryError(error instanceof Error
-        ? `${savedPrefix}the remaining practice moment could not be saved: ${error.message}`
-        : `${savedPrefix}the remaining practice moment could not be saved locally.`)
+        setRetryError(result.error instanceof Error
+          ? `${savedPrefix}the remaining practice moment could not be saved: ${result.error.message}`
+          : `${savedPrefix}the remaining practice moment could not be saved locally.`)
+      }
     } finally {
-      setRetrySaving(false)
+      setRetrySavingAction(null)
     }
   }
 
@@ -843,6 +879,7 @@ export function AnalysisWorkspace({
             {engineBusy && <p className="review-retained" role="status">The live bot move has priority. Review starts as soon as it finishes.</p>}
             {reviewHydrating && <p className="review-retained" role="status">Checking this game for a saved review…</p>}
             <ReviewSaveNotice saving={reviewSaving} />
+            <RetrySaveNotice action={retrySavingAction} />
             {reviewRunning && reviewProgress && (
               <div className="review-progress" role="status" aria-live="polite">
                 <div><span>Analysing move {Math.min(reviewProgress.completedPly + 1, reviewProgress.totalPly)} of {reviewProgress.totalPly}</span><strong>{Math.round(100 * reviewProgress.completedPly / reviewProgress.totalPly)}%</strong></div>
@@ -863,13 +900,13 @@ export function AnalysisWorkspace({
                   <div><span>Best found</span><strong>{review.summary.bestMoveRate}%</strong><small>of moves</small></div>
                 </div>
                 {batchRetryItems.length > 0 && (
-                  <div className="review-practice-callout">
+                  <div className="review-practice-callout" aria-busy={retrySaving}>
                     <div>
                       <span>From your games</span>
                       <strong>{batchRetryItems.length} key moment{batchRetryItems.length === 1 ? '' : 's'} ready to practise</strong>
                       <small>Replay the saved Stockfish line without revealing it first.</small>
                     </div>
-                    <button className="primary-button" type="button" disabled={retrySaving} onClick={() => void queueRetryItems(batchRetryItems)}><PlayCircle size={15} />Practice key moments</button>
+                    <RetryPracticeButton className="primary-button" action="batch" savingAction={retrySavingAction} onClick={() => void queueRetryItems(batchRetryItems, 'batch')} />
                   </div>
                 )}
                 {review.summary.turningPoints.length > 0 && (
@@ -890,7 +927,7 @@ export function AnalysisWorkspace({
                     <small>Depth {selectedReview.depth} · {selectedReview.phase} · {selectedReview.confidence === 'limited' ? 'limited confidence' : 'normal confidence'}</small>
                     <CoachEvidenceCard guidance={coachGuidance} />
                     {selectedRetryItem && (
-                      <button className="review-detail__practice secondary-button" type="button" disabled={retrySaving} onClick={() => void queueRetryItems([selectedRetryItem])}><PlayCircle size={15} />Practice this position</button>
+                      <RetryPracticeButton className="review-detail__practice secondary-button" action="single" savingAction={retrySavingAction} onClick={() => void queueRetryItems([selectedRetryItem], 'single')} />
                     )}
                   </article>
                 )}
