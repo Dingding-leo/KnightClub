@@ -42,6 +42,8 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 
 **Latest phone Review replay-control evidence (2026-07-23):** lint and typecheck passed; `npm test` passed with 51 files / 252 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 36 tests; production web and macOS Tauri builds passed; and the local Vite endpoint returned HTTP 200. The Review markup contract retains labelled first/previous/next/last controls. At the phone breakpoint, CSS reserves four 44 px arrow columns around the position output instead of reducing them at 430 px. This is deterministic/markup evidence; a manual narrow-window replay walkthrough remains release handoff work.
 
+**Latest phone Play-notation target evidence (2026-07-23):** lint and typecheck passed; `npm test` passed with 51 files / 252 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 36 tests; production web and macOS Tauri builds passed; and the local Vite endpoint returned HTTP 200. MoveList contracts retain separate labelled White/Black SAN buttons and the active displayed position. At the phone breakpoint, CSS raises each button from 24 px to 44 px while preserving the two-move row grid and live-follow behavior. This is deterministic/markup evidence; a manual phone notation walkthrough remains release handoff work.
+
 ## Workspace-navigation user check
 
 1. In **Play**, scroll the page to a measurable non-zero position (for example, 550 px), then select **Review**. Confirm the page starts at the top and the current workspace heading receives focus without being scrolled away.
@@ -195,7 +197,8 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 2. At the earliest previewable move, **Previous** must be disabled. Use **Next** across the remaining moves: the board and last-move highlight must advance one ply at a time, and only the newest move may return to the live board.
 3. While inspecting an earlier ply during a bot turn, let the bot reply. Confirm the displayed historical board does not jump; use **Next** to reach the prior latest move, then the appended reply, and only then live play.
 4. At 320, 375 and 430 px widths, confirm all four preview actions remain fully labelled, have 44 px touch targets, do not introduce horizontal overflow and do not enable board movement, Undo, draw or resign while previewing.
-5. Select **Review this position** from an earlier preview. Confirm Review opens at the same position count and board FEN, including when a bot reply arrives while Review loads. Return to Play and confirm its live clock/game state was never changed. If the source game is replaced before Review opens, confirm Review safely uses its normal final position rather than claiming the old target.
+5. At the same widths, confirm every white and black SAN entry in **Moves** has a 44 px target, two entries remain aligned in each move row, no rows overlap and choosing either entry starts the same historical preview.
+6. Select **Review this position** from an earlier preview. Confirm Review opens at the same position count and board FEN, including when a bot reply arrives while Review loads. Return to Play and confirm its live clock/game state was never changed. If the source game is replaced before Review opens, confirm Review safely uses its normal final position rather than claiming the old target.
 
 ## Play-flow regression check
 

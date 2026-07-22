@@ -1812,6 +1812,8 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
   .board-stage { width: 100%; }
   .board-status { min-height: 32px; }
   .board-status__summary { gap: 7px; }
+  .move-row { min-height: 44px; padding-top: 0; padding-bottom: 0; }
+  .move-row button { min-height: 44px; }
   .analysis-navigation { grid-template-columns: 44px 44px 1fr 44px 44px; }
   .analysis-navigation button { min-width: 44px; min-height: 44px; }
   .play-preview-navigation__step,
