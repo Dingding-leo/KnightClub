@@ -99,6 +99,7 @@ import {
 import { GameSoundPlayer, type GameSoundEvent } from './audio/gameSounds'
 import { gameShortcutFor } from './domain/shortcuts'
 import { copyText, downloadText } from './domain/textTransfer'
+import { positionTransferFor } from './domain/positionTransfer'
 import { handoffWorkspace } from './domain/workspaceNavigation'
 import { terminalSessionFingerprint } from './domain/libraryIdentity'
 import { HybridEngineClient, isTauriRuntime, type EngineSearchResult } from './engine/stockfishClient'
@@ -490,7 +491,14 @@ export default function App() {
     () => previewPly === null ? game : cloneGameAtPly(game, startFen, verbose, previewPly),
     [game, previewPly, startFen, verbose],
   )
+  const positionTransfer = useMemo(
+    () => positionTransferFor(previewGame, previewing),
+    [previewGame, previewing],
+  )
   const previewMove = previewPly === null ? null : verbose[previewPly - 1] ?? null
+  const previewStatus = previewing
+    ? `Viewing after ${previewMove?.san ?? 'the selected move'} — read-only; live clock continues.`
+    : null
   const tacticProgress = useMemo(
     () => tacticsStateToTacticProgress(tacticsState, SEED_TACTICS),
     [tacticsState],
@@ -591,13 +599,21 @@ export default function App() {
   }
 
   const copyCurrentFen = async () => {
-    const result = await copyText(game.fen())
-    reportTransfer(result.ok, 'Current FEN copied.', 'Couldn’t copy FEN. Download it instead.')
+    const result = await copyText(positionTransfer.fen)
+    reportTransfer(
+      result.ok,
+      positionTransfer.copySuccess,
+      'Couldn’t copy FEN. Download it instead.',
+    )
   }
 
   const downloadCurrentFen = () => {
-    const result = downloadText(`knightclub-position-${new Date().toISOString().slice(0, 10)}.fen`, game.fen())
-    reportTransfer(result.ok, 'FEN download started.', 'Couldn’t start the FEN download.')
+    const result = downloadText(`knightclub-position-${new Date().toISOString().slice(0, 10)}.fen`, positionTransfer.fen)
+    reportTransfer(
+      result.ok,
+      positionTransfer.downloadSuccess,
+      'Couldn’t start the FEN download.',
+    )
   }
 
   const newClock = (control = timeControl, color: Color = 'w') => createReadyClock(control, color, Date.now())
@@ -1674,9 +1690,7 @@ export default function App() {
             <div className="board-stage">
               <div className="board-status">
                 <div className="board-status__summary">
-                  <span>{previewing
-                    ? `Viewing after ${previewMove?.san ?? 'the selected move'} — read-only`
-                    : premoveWindow ? `${opponentName} is thinking — queue one premove.` : currentStatus}</span>
+                  <span title={previewStatus ?? undefined}>{previewStatus ?? (premoveWindow ? `${opponentName} is thinking — queue one premove.` : currentStatus)}</span>
                   <strong>Material {formatEvaluation(evaluateMaterial(previewGame, 'w'))}</strong>
                 </div>
                 <div className="board-status__actions">
@@ -1907,9 +1921,9 @@ export default function App() {
               <details className="position-tools">
                 <summary><span>Position tools</span><ChevronDown size={18} /></summary>
                 <div>
-                  <span className="field-label">Share current position</span>
-                  <div className="transfer-actions" aria-label="Current FEN actions">
-                    <button className="secondary-button" type="button" onClick={() => void copyCurrentFen()}><Copy size={15} />Copy current FEN</button>
+                  <span className="field-label">{positionTransfer.contextLabel}</span>
+                  <div className="transfer-actions" aria-label={positionTransfer.actionsLabel}>
+                    <button className="secondary-button" type="button" onClick={() => void copyCurrentFen()}><Copy size={15} />{positionTransfer.copyLabel}</button>
                     <button className="secondary-button" type="button" onClick={downloadCurrentFen}><Download size={15} />Download FEN</button>
                   </div>
                   <label htmlFor="fen-input">Load a FEN position</label>

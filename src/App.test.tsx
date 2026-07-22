@@ -1,6 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server'
+import { Chess } from 'chess.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { cloneGameAtPly } from './domain/chess'
+import { positionTransferFor } from './domain/positionTransfer'
 
 const SESSION_KEY = 'knightclub.active-session.v1'
 
@@ -112,6 +115,24 @@ describe('local transfer convenience contracts', () => {
     expect(markup).toContain('Share current position')
     expect(markup).toContain('Copy current FEN')
     expect(markup).toContain('Download FEN')
+  })
+
+  it('exports the position currently displayed by a historical preview', () => {
+    const game = new Chess()
+    game.move('e4')
+    game.move('e5')
+    const preview = cloneGameAtPly(game, new Chess().fen(), game.history({ verbose: true }), 1)
+
+    const displayed = positionTransferFor(preview, true)
+    const live = positionTransferFor(game, false)
+
+    expect(displayed.fen).toBe(preview.fen())
+    expect(displayed.fen).not.toBe(live.fen)
+    expect(displayed.contextLabel).toBe('Share displayed position')
+    expect(displayed.copyLabel).toBe('Copy displayed FEN')
+    expect(displayed.downloadSuccess).toBe('Displayed FEN download started.')
+    expect(live.contextLabel).toBe('Share current position')
+    expect(live.copyLabel).toBe('Copy current FEN')
   })
 })
 
