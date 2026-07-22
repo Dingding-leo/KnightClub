@@ -20,12 +20,12 @@ export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
   elo: 1700,
   skillLevel: 8,
   limitStrength: true,
-  moveTimeMs: 100,
+  moveTimeMs: 75,
   depth: null,
-  nodes: 10_000,
+  nodes: 5_000,
   multiPv: 1,
   threads: 1,
-  hashMb: 32,
+  hashMb: 16,
 }
 
 function finiteNumber(value: unknown, fallback: number): number {

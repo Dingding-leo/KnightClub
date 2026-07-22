@@ -1,8 +1,23 @@
 import type { Square } from 'chess.js'
 import type { CoachGuidance } from './coach'
+import type { ReviewedMove } from './reviewModel'
 
 export function evidenceSquaresForGuidance(guidance: CoachGuidance | null): Set<Square> {
   return new Set(guidance?.evidence.flatMap((item) => item.squares) ?? [])
+}
+
+/**
+ * Coach evidence may be calculated from a deferred cursor value so board and
+ * notation navigation can paint first. Never display the previous position's
+ * evidence while that deferred calculation catches up, including after a
+ * restored report replaces a same-ply move record.
+ */
+export function visibleCoachGuidance(
+  selectedMove: ReviewedMove | null,
+  guidanceMove: ReviewedMove | null,
+  guidance: CoachGuidance | null,
+): CoachGuidance | null {
+  return selectedMove !== null && selectedMove === guidanceMove ? guidance : null
 }
 
 export interface FullReviewAction {

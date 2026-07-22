@@ -342,29 +342,29 @@ pub fn strength_preset(level: &str) -> Result<SearchSettings, EngineError> {
             hash_mb: 16,
             multi_pv: 1,
             depth: None,
-            nodes: Some(4_000),
+            nodes: Some(2_000),
         }),
         "balanced" => Ok(SearchSettings {
             elo: 1700,
-            move_time_ms: 100,
+            move_time_ms: 75,
             skill_level: 8,
             limit_strength: true,
             threads: 1,
             hash_mb: 16,
             multi_pv: 1,
             depth: None,
-            nodes: Some(10_000),
+            nodes: Some(5_000),
         }),
         "strong" => Ok(SearchSettings {
             elo: 2200,
-            move_time_ms: 160,
+            move_time_ms: 120,
             skill_level: 14,
             limit_strength: true,
             threads: 1,
             hash_mb: 32,
             multi_pv: 1,
             depth: None,
-            nodes: Some(24_000),
+            nodes: Some(12_000),
         }),
         _ => Err(EngineError::InvalidLevel(format!(
             "Unknown engine level: {level}"
@@ -863,12 +863,14 @@ impl EngineSupervisor {
         }
         let result =
             self.best_move_after_validation(fen, settings, timeout, request_id, cancelled_through);
-        // A timeout, cancellation or protocol failure can leave output in
-        // flight. The next request still fences with `isready`, but requiring
-        // a fresh option acknowledgement avoids trusting a partial state when
-        // this supervisor is reused directly.
-        if result.is_err() {
-            self.configured_options = None;
+        // A cancelled search has already passed its option `readyok` fence.
+        // The following request fences again and drains its late `bestmove`,
+        // so retain the acknowledged option vector and the warm Hash table.
+        // Other failures can leave UCI state incomplete and must start fresh.
+        if let Err(error) = &result {
+            if !matches!(error, EngineError::Cancelled) {
+                self.configured_options = None;
+            }
         }
         result
     }
@@ -895,7 +897,7 @@ impl EngineSupervisor {
         let mut lines = BTreeMap::<u8, AnalysisInfo>::new();
         loop {
             if is_play_request_cancelled(request_id, cancelled_through) {
-                let _ = self.send("stop");
+                self.send("stop")?;
                 return Err(EngineError::Cancelled);
             }
             if Instant::now() >= deadline {
@@ -966,8 +968,13 @@ impl EngineSupervisor {
             return Err(EngineError::Cancelled);
         }
         let result = self.analyze_after_validation(fen, settings, timeout, &is_cancelled);
-        if result.is_err() {
-            self.configured_options = None;
+        // See `best_move`: cancellation happens only after the active
+        // request has an acknowledged option vector, and the next `isready`
+        // drains late output before any new position/go pair.
+        if let Err(error) = &result {
+            if !matches!(error, EngineError::Cancelled) {
+                self.configured_options = None;
+            }
         }
         result
     }
@@ -1002,7 +1009,7 @@ impl EngineSupervisor {
         let mut lines = BTreeMap::<u8, AnalysisInfo>::new();
         loop {
             if is_cancelled() {
-                let _ = self.send("stop");
+                self.send("stop")?;
                 return Err(EngineError::Cancelled);
             }
             if Instant::now() >= deadline {
@@ -1230,6 +1237,18 @@ struct ManagedEngine {
     supervisor: EngineSupervisor,
 }
 
+/**
+ * A cancellation is an intentional, recoverable stop after a request has
+ * already crossed its UCI ready fence. Keep that warm process so fast Review
+ * navigation does not repeatedly spawn Stockfish or rebuild Hash. Every other
+ * supervisor error still discards the process before it can serve a request.
+ */
+fn discard_engine_after_error(engine: &mut Option<ManagedEngine>, error: &EngineError) {
+    if !matches!(error, EngineError::Cancelled) {
+        *engine = None;
+    }
+}
+
 #[derive(Clone)]
 pub struct StockfishState {
     engine: Arc<Mutex<Option<ManagedEngine>>>,
@@ -1320,7 +1339,7 @@ fn stockfish_best_move_blocking(
     ) {
         Ok(outcome) => outcome,
         Err(error) => {
-            *guard = None;
+            discard_engine_after_error(&mut guard, &error);
             return Err(error.to_string());
         }
     };
@@ -1409,7 +1428,7 @@ fn stockfish_analyze_blocking(
                 }) {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    *guard = None;
+                    discard_engine_after_error(&mut guard, &error);
                     return Err(error.to_string());
                 }
             };
@@ -1596,5 +1615,23 @@ mod tests {
                 .cancelled
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn cancellation_keeps_a_warm_managed_engine_but_other_errors_discard_it() {
+        let path = PathBuf::from("/not-started-engine");
+        let mut engine = Some(ManagedEngine {
+            path: path.clone(),
+            supervisor: EngineSupervisor::new(path),
+        });
+
+        discard_engine_after_error(&mut engine, &EngineError::Cancelled);
+        assert!(
+            engine.is_some(),
+            "a normal stop must retain the warm engine"
+        );
+
+        discard_engine_after_error(&mut engine, &EngineError::Timeout("late reply".into()));
+        assert!(engine.is_none(), "a failed engine must still be recycled");
     }
 }

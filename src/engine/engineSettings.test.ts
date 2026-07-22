@@ -4,10 +4,10 @@ import { DEFAULT_ENGINE_SETTINGS, normalizeEngineSettings } from './engineSettin
 describe('engine settings', () => {
   it('starts new configurable engines with a balanced low-compute budget', () => {
     expect(DEFAULT_ENGINE_SETTINGS).toMatchObject({
-      moveTimeMs: 100,
-      nodes: 10_000,
+      moveTimeMs: 75,
+      nodes: 5_000,
       threads: 1,
-      hashMb: 32,
+      hashMb: 16,
     })
   })
 

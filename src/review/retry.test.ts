@@ -8,6 +8,7 @@ import {
   createRetryItemFromVerifiedTimeline,
   createVerifiedRetryTimeline,
   evaluateRetryMove,
+  isRetryEligibleReviewMove,
   recordRetryAttempt,
   type RetryItem,
   type VerifiedRetryTimeline,
@@ -171,6 +172,27 @@ describe('retry item domain', () => {
     expect(createRetryItem({ ...base, move: reviewedMove(timeline, 1, { to: 'e3' }) })).toBeNull()
     expect(createRetryItem({ ...base, move: reviewedMove(timeline, 1, { bestMoveUci: 'a1a8' }) })).toBeNull()
     expect(createRetryItem({ ...base, reviewKey: 'not-a-review-key' })).toBeNull()
+  })
+
+  it('keeps lightweight Review eligibility separate from fail-closed retry creation', () => {
+    const timeline = createPgnTimeline('1. e4 e5 *')
+    const eligible = reviewedMove(timeline, 1)
+    const illegalButWellFormed = reviewedMove(timeline, 1, { bestMoveUci: 'a1a8' })
+
+    expect(isRetryEligibleReviewMove(eligible)).toBe(true)
+    expect(isRetryEligibleReviewMove(reviewedMove(timeline, 1, { classification: 'good' }))).toBe(false)
+    expect(isRetryEligibleReviewMove(reviewedMove(timeline, 1, { confidence: 'limited' }))).toBe(false)
+    expect(isRetryEligibleReviewMove(reviewedMove(timeline, 1, { isBestMove: true }))).toBe(false)
+    expect(isRetryEligibleReviewMove(reviewedMove(timeline, 1, { bestMoveUci: null }))).toBe(false)
+
+    // UI eligibility intentionally avoids a chess replay; the save boundary
+    // still rejects a syntactically valid but illegal recorded solution.
+    expect(isRetryEligibleReviewMove(illegalButWellFormed)).toBe(true)
+    expect(createRetryItem({
+      timeline,
+      move: illegalButWellFormed,
+      reviewKey: '0123456789abcdef',
+    })).toBeNull()
   })
 
   it('reuses one immutable verified timeline without weakening the standalone fail-closed replay', () => {

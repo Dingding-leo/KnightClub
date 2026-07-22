@@ -375,15 +375,32 @@ export function createRetryKey(reviewKey: string, sourcePly: number): string {
   return `${reviewKey}:${sourcePly}`
 }
 
+/**
+ * Cheaply identifies a reviewed move that is worth offering as a training
+ * prompt. This deliberately does not claim that a durable retry can be made:
+ * the later creation boundary still validates the immutable timeline and both
+ * moves against chess.js before anything can be saved.
+ */
+export function isRetryEligibleReviewMove(
+  move: Pick<ReviewedMove, 'classification' | 'isBestMove' | 'confidence' | 'bestMoveUci'> | null | undefined,
+): boolean {
+  return Boolean(
+    move
+    && ERROR_CLASSIFICATIONS.has(move.classification)
+    && move.isBestMove === false
+    && move.confidence === 'normal'
+    && typeof move.bestMoveUci === 'string'
+    && UCI_PATTERN.test(move.bestMoveUci),
+  )
+}
+
 /** Builds a durable retry item only after its source move facts are verified. */
 function createRetryItemFromVerifiedMove(
   input: Pick<CreateRetryItemInput, 'move' | 'reviewKey' | 'guidance' | 'now'> | null | undefined,
   verified: VerifiedTimelineMove | null,
 ): RetryItem | null {
   if (!input
-    || !ERROR_CLASSIFICATIONS.has(input.move?.classification)
-    || input.move.isBestMove !== false
-    || input.move.confidence !== 'normal'
+    || !isRetryEligibleReviewMove(input.move)
     || !REVIEW_KEY_PATTERN.test(input.reviewKey)) return null
 
   if (!verified) return null

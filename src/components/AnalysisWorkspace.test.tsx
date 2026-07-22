@@ -15,12 +15,18 @@ import { resolvePlayPreviewReviewPly } from '../review/playPreviewReviewTarget'
 import { liveGameContinuation } from '../review/liveGameContinuation'
 import { createInitialWorkspaceState, liveTimelineFor } from '../review/reviewWorkspaceState'
 import type { CoachGuidance } from '../review/coach'
+import type { ReviewedMove } from '../review/reviewModel'
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { GameReview } from '../review/gameReviewRunner'
 import type { PersistedReview } from '../review/reviewPersistence'
 import type { RetryItem } from '../review/retry'
 import { saveRetryItemsSerially } from '../review/retryQueuePersistence'
-import { evidenceSquaresForGuidance, reviewNavigationForKey, reviewPlyAfter } from '../review/reviewWorkspaceUtils'
+import {
+  evidenceSquaresForGuidance,
+  reviewNavigationForKey,
+  reviewPlyAfter,
+  visibleCoachGuidance,
+} from '../review/reviewWorkspaceUtils'
 import { selectedReviewMoveAtPly } from '../review/reviewSelection'
 
 function deferred<T>() {
@@ -562,6 +568,16 @@ describe('coach evidence convenience contracts', () => {
       ...guidance,
       evidence: [...guidance.evidence, { ...guidance.evidence[0], squares: ['e5'] }],
     })]).toEqual(['e5', 'e8'])
+  })
+
+  it('hides deferred coach evidence until it belongs to the exact selected move', () => {
+    const selected = { ply: 7 } as ReviewedMove
+    const restoredSamePly = { ...selected } as ReviewedMove
+
+    expect(visibleCoachGuidance(selected, selected, guidance)).toBe(guidance)
+    expect(visibleCoachGuidance(selected, restoredSamePly, guidance)).toBeNull()
+    expect(visibleCoachGuidance(selected, null, guidance)).toBeNull()
+    expect(visibleCoachGuidance(null, null, guidance)).toBeNull()
   })
 
   it('maps unmodified replay keys while leaving editable and browser shortcuts alone', () => {

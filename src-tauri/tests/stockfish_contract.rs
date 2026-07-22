@@ -10,7 +10,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -90,16 +91,16 @@ fn maps_levels_to_multi_dimensional_strength_presets() {
     assert!(easy.move_time_ms < balanced.move_time_ms);
     assert!(balanced.move_time_ms < strong.move_time_ms);
     assert_eq!(easy.move_time_ms, 50);
-    assert_eq!(balanced.move_time_ms, 100);
-    assert_eq!(strong.move_time_ms, 160);
+    assert_eq!(balanced.move_time_ms, 75);
+    assert_eq!(strong.move_time_ms, 120);
     assert!(easy.skill_level < strong.skill_level);
     assert!(easy.limit_strength && balanced.limit_strength && strong.limit_strength);
     assert_eq!(easy.threads, 1);
     assert_eq!(balanced.threads, 1);
     assert_eq!(strong.threads, 1);
-    assert_eq!(easy.nodes, Some(4_000));
-    assert_eq!(balanced.nodes, Some(10_000));
-    assert_eq!(strong.nodes, Some(24_000));
+    assert_eq!(easy.nodes, Some(2_000));
+    assert_eq!(balanced.nodes, Some(5_000));
+    assert_eq!(strong.nodes, Some(12_000));
 }
 
 #[test]
@@ -145,7 +146,7 @@ fn validates_and_serializes_optional_play_candidate_counts() {
     let mut preset = strength_preset("balanced").expect("preset");
     apply_play_candidate_count(&mut preset, Some(2)).expect("two candidates are allowed");
     assert_eq!(preset.multi_pv, 2);
-    assert_eq!(go_command(&preset), "go movetime 100 nodes 10000");
+    assert_eq!(go_command(&preset), "go movetime 75 nodes 5000");
     assert!(apply_play_candidate_count(&mut preset, Some(3)).is_err());
 
     let mut custom = preset.clone();
@@ -320,7 +321,7 @@ done
             .filter(|line| line.starts_with("go movetime "))
             .copied()
             .collect::<Vec<_>>(),
-        vec!["go movetime 100 nodes 10000"]
+        vec!["go movetime 75 nodes 5000"]
     );
 }
 
@@ -401,10 +402,101 @@ done
             .copied()
             .collect::<Vec<_>>(),
         vec![
-            "go movetime 100 nodes 10000",
-            "go movetime 80 nodes 10000",
-            "go movetime 80 nodes 10000",
+            "go movetime 75 nodes 5000",
+            "go movetime 80 nodes 5000",
+            "go movetime 80 nodes 5000",
         ]
+    );
+}
+
+#[test]
+fn cancelled_play_search_reuses_the_warm_process_and_hash() {
+    let (directory, command_log) = fake_engine_with_command_log(
+        r#"
+while IFS= read -r line; do
+  echo "$line" >> "$COMMAND_LOG"
+  case "$line" in
+    uci) echo "id name Warm Cancellation Fixture"; echo "uciok" ;;
+    isready) echo "readyok" ;;
+    go*)
+      if [ -f "$COMMAND_LOG.stopped" ]; then
+        echo "bestmove e7e5"
+      fi
+      ;;
+    stop) touch "$COMMAND_LOG.stopped"; echo "bestmove 0000" ;;
+    quit) exit 0 ;;
+  esac
+done
+"#,
+    );
+    let path = engine_path(directory.path());
+    let cancelled = Arc::new(AtomicU64::new(0));
+    let mut engine = EngineSupervisor::new(path);
+    let settings = strength_preset("balanced").expect("preset");
+    engine
+        .initialize(Duration::from_secs(3))
+        .expect("fixture initializes");
+    let timer_cancelled = Arc::clone(&cancelled);
+    let cancellation_timer = std::thread::spawn(move || {
+        // The fixture never returns a first bestmove. Start this timer only
+        // after UCI initialization, then cancel the active search without
+        // relying on command-log polling or process scheduling.
+        std::thread::sleep(Duration::from_millis(100));
+        timer_cancelled.store(7, Ordering::Release);
+    });
+
+    let first = engine
+        .best_move(
+            START_FEN,
+            &settings,
+            Duration::from_secs(3),
+            7,
+            cancelled.as_ref(),
+        )
+        .expect_err("the first search is cancelled after go");
+    cancellation_timer
+        .join()
+        .expect("cancellation timer joins without panic");
+    assert!(matches!(first, EngineError::Cancelled));
+
+    let second = engine.best_move(
+        START_FEN,
+        &settings,
+        Duration::from_secs(3),
+        8,
+        cancelled.as_ref(),
+    );
+    if let Err(error) = &second {
+        panic!(
+            "a new request must reuse the warm fixture: {error}; commands: {}",
+            fs::read_to_string(&command_log).unwrap_or_default()
+        );
+    }
+    assert_eq!(
+        second.expect("second result").best_move.as_deref(),
+        Some("e7e5")
+    );
+
+    let commands = fs::read_to_string(command_log).expect("read command log");
+    let lines: Vec<_> = commands.lines().collect();
+    assert_eq!(lines.iter().filter(|line| **line == "uci").count(), 1);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("setoption name "))
+            .count(),
+        6,
+        "a cancelled search must not rebuild Hash/options"
+    );
+    assert_eq!(lines.iter().filter(|line| **line == "isready").count(), 3);
+    assert_eq!(lines.iter().filter(|line| **line == "stop").count(), 1);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("go movetime "))
+            .copied()
+            .collect::<Vec<_>>(),
+        vec!["go movetime 75 nodes 5000", "go movetime 75 nodes 5000"]
     );
 }
 

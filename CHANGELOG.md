@@ -15,7 +15,7 @@
 - Original local Tactics Sprint: a three-position immediate practice path with no initial answer/PV exposure, local legal replay, two-stage hints, explicit reveal, reset and terminal outcome metrics
 - Bounded tactics progress plus immutable-attempt persistence in browser storage and SQLite schema v5, with deterministic reconciliation and atomic native attempt/progress recording
 - Explicit Review waiting state while a live bot move owns the local engine
-- Lower default bot budgets across browser and desktop: Easy/Balanced/Strong now cap at 4k/10k/24k nodes and 50/100/160 ms while preserving one-threaded named-profile behavior and display pacing
+- Lower default bot budgets across browser and desktop: Easy/Balanced/Strong now cap at 2k/5k/12k nodes and 50/75/120 ms while preserving one-threaded named-profile behavior and display pacing
 - Play notation now uses memoized move rows plus one delegated selection handler, so long histories update only affected rows as moves arrive or players preview a position
 - Finished games now write their canonical review key directly from the existing verbose move history, while legacy library records backfill it only when opened; completing a review updates matching metadata without replaying every stored PGN
 - Full-game Review now waits for a local saved-report lookup before it enables a costly rerun, and labels an intentional rerun clearly
@@ -90,6 +90,8 @@
 
 ### Changed
 
+- Normal native Stockfish cancellation now retains the warm process, acknowledged UCI vector and Hash; the next `isready` fence drains late output safely, while failed and timed-out processes are still recreated
+- Review cursor changes now paint board/notation first, defer coach evidence and create strict retry payloads only when the player chooses Practice; ambient candidate analysis waits for a 350 ms idle pause before starting uncached engine work
 - Personal retry queues now reconstruct `chess.js` lines only for the active exercise; unopened selector labels derive from persisted FEN fullmove facts instead of replaying every saved PV
 - Browser retry save/load-one/delete paths now reuse a private raw-text-versioned canonical queue snapshot after first validation, avoiding repeated replay and sorting of up to 500 unchanged saved positions
 - A completed Review now creates one frozen, fully validated private retry-timeline snapshot; browsing an eligible error or assembling its small practice batch looks up the selected ply instead of replaying the entire PGN again, while the public retry boundary remains fail-closed
@@ -106,7 +108,7 @@
 - Review, Train and Insights are now independently loaded local workspaces with hover/focus prefetch, stable loading feedback and a scoped reload recovery instead of adding their code to the initial Play bundle
 - Browser and desktop Stockfish runtimes now reuse only acknowledged unchanged UCI option blocks while retaining `isready` fences, preventing repeated Hash/option churn during continuous play and full-game review
 - Opening Play no longer probes Stockfish or constructs the KnightBot fallback worker. Both engines initialize only for a real bot move or explicit verification.
-- Easy/Balanced/Strong play presets now use 50/100/160 ms, 4k/10k/24k node limits, one thread and 16/16/32 MB hash respectively; the same cancellable UI pacing floor preserves a natural reply cadence without extra search CPU.
+- Easy/Balanced/Strong play presets now use 50/75/120 ms, 2k/5k/12k node limits, one thread and 16/16/32 MB hash respectively; the same cancellable UI pacing floor preserves a natural reply cadence without extra search CPU.
 - The fallback KnightBot is a bounded one-ply recovery path instead of a depth-two full-tree search.
 - A shared clock runtime now confines visible-second and low-time-tenth updates to player-clock consumers, preserves exact timeout timestamps and reports one flag while every workspace remains mounted. Memoized board-square wrappers keep selection, drag, premove and keyboard focus from replacing all 64 buttons.
 - Full-game review progress now leaves an unchanged 64-square read-only board and long notation list untouched until the selected position, evidence or completed report changes.

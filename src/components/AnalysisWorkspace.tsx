@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -72,6 +73,7 @@ import {
   fullReviewActionFor,
   reviewNavigationForKey,
   reviewPlyAfter,
+  visibleCoachGuidance,
 } from '../review/reviewWorkspaceUtils'
 import { selectedReviewMoveAtPly } from '../review/reviewSelection'
 import {
@@ -90,6 +92,7 @@ import {
 import {
   createRetryItemFromVerifiedTimeline,
   createVerifiedRetryTimeline,
+  isRetryEligibleReviewMove,
   type RetryItem,
 } from '../review/retry'
 import {
@@ -235,6 +238,11 @@ const effortOptions = {
   balanced: { label: 'Balanced · 0.8s', moveTimeMs: 800, depth: 18 },
   deep: { label: 'Deep · 2s', moveTimeMs: 2000, depth: 22 },
 } as const
+
+// Ambient lines are useful once a player pauses, not on every arrow-key hop.
+// This keeps quick scrubbing responsive and avoids starting searches that are
+// very likely to be cancelled by the next position.
+const AMBIENT_ANALYSIS_IDLE_DELAY_MS = 350
 
 type Effort = keyof typeof effortOptions
 type PromotionPiece = Extract<PieceSymbol, 'q' | 'r' | 'b' | 'n'>
@@ -611,43 +619,36 @@ export function AnalysisWorkspace({
     hasReview: review !== null,
   })
   const selectedReview = variationActive ? null : selectedReviewMoveAtPly(review, ply)
-  const coachGuidance = useMemo(() => {
-    return buildCoachGuidanceFromTimeline(timeline, selectedReview)
-  }, [selectedReview, timeline])
+  // Cursor navigation updates the board and notation at interaction priority.
+  // Tactical proof can inspect several reconstructed boards, so let React
+  // compute it after that paint rather than on every arrow-key press.
+  const deferredCoachReview = useDeferredValue(selectedReview)
+  const deferredCoachGuidance = useMemo(() => {
+    return buildCoachGuidanceFromTimeline(timeline, deferredCoachReview)
+  }, [deferredCoachReview, timeline])
+  const coachGuidance = visibleCoachGuidance(
+    selectedReview,
+    deferredCoachReview,
+    deferredCoachGuidance,
+  )
   const coachEvidenceSquares = useMemo(() => evidenceSquaresForGuidance(coachGuidance), [coachGuidance])
   const variationTargets = useMemo(() => {
     if (!variation || !selectedVariationSquare || variationPromotion || variationAtLimit) return new Set<Square>()
     return new Set<Square>(legalMovesFrom(boardGame, selectedVariationSquare).map((move) => move.to))
   }, [boardGame, selectedVariationSquare, variation, variationAtLimit, variationPromotion])
-  const selectedRetryItem = useMemo(() => {
-    if (!selectedReview || !reviewKey || !verifiedRetryTimeline) return null
-    return createRetryItemFromVerifiedTimeline({
-      verifiedTimeline: verifiedRetryTimeline,
-      move: selectedReview,
-      reviewKey,
-      guidance: coachGuidance,
-    })
-  }, [coachGuidance, reviewKey, selectedReview, verifiedRetryTimeline])
-  const batchRetryItems = useMemo(() => {
+  const selectedRetryEligible = Boolean(
+    selectedReview
+    && reviewKey
+    && verifiedRetryTimeline
+    && isRetryEligibleReviewMove(selectedReview),
+  )
+  const batchRetryCandidates = useMemo(() => {
     if (!review || !reviewKey || !verifiedRetryTimeline) return []
-    const candidates = review.moves
-      .filter((move) => move.isBestMove === false && move.confidence === 'normal'
-        && ['inaccuracy', 'mistake', 'miss', 'blunder'].includes(move.classification))
+    return review.moves
+      .filter(isRetryEligibleReviewMove)
       .sort(compareRetryCandidates)
       .slice(0, 12)
-    const items: RetryItem[] = []
-    for (const move of candidates) {
-      const item = createRetryItemFromVerifiedTimeline({
-        verifiedTimeline: verifiedRetryTimeline,
-        move,
-        reviewKey,
-        guidance: buildCoachGuidanceFromTimeline(timeline, move),
-      })
-      if (item) items.push(item)
-      if (items.length === 3) break
-    }
-    return items
-  }, [review, reviewKey, timeline, verifiedRetryTimeline])
+  }, [review, reviewKey, verifiedRetryTimeline])
   const retrySaving = retrySavingAction !== null
   const moveRows = useMemo(
     () => {
@@ -840,7 +841,7 @@ export function AnalysisWorkspace({
           setAnalysisError(error instanceof Error ? error.message : 'Stockfish analysis failed.')
           setLoading(false)
         })
-    }, 140)
+    }, AMBIENT_ANALYSIS_IDLE_DELAY_MS)
 
     return () => {
       active = false
@@ -1269,6 +1270,48 @@ export function AnalysisWorkspace({
     }
   }
 
+  const createRetryItemsForPractice = (
+    candidates: readonly ReviewedMove[],
+    maximum: number,
+  ): RetryItem[] => {
+    if (!reviewKey || !verifiedRetryTimeline) return []
+
+    const items: RetryItem[] = []
+    for (const move of candidates) {
+      // Do not reuse deferred display guidance here: a Practice click must
+      // capture coaching derived from this exact current reviewed move.
+      const item = createRetryItemFromVerifiedTimeline({
+        verifiedTimeline: verifiedRetryTimeline,
+        move,
+        reviewKey,
+        guidance: buildCoachGuidanceFromTimeline(timeline, move),
+      })
+      if (item) items.push(item)
+      if (items.length === maximum) break
+    }
+    return items
+  }
+
+  const practiceSelectedRetry = () => {
+    if (!retryStore || retrySaving || !selectedReview || !selectedRetryEligible) return
+    const items = createRetryItemsForPractice([selectedReview], 1)
+    if (!items.length) {
+      setRetryError('Couldn’t safely prepare this position for your training queue.')
+      return
+    }
+    void queueRetryItems(items, 'single')
+  }
+
+  const practiceBatchRetries = () => {
+    if (!retryStore || retrySaving || !batchRetryCandidates.length) return
+    const items = createRetryItemsForPractice(batchRetryCandidates, 3)
+    if (!items.length) {
+      setRetryError('Couldn’t safely prepare these positions for your training queue.')
+      return
+    }
+    void queueRetryItems(items, 'batch')
+  }
+
   return (
     <section className="analysis-workspace" aria-label="Analysis board">
       <div className="analysis-board-column">
@@ -1452,14 +1495,14 @@ export function AnalysisWorkspace({
                   <div><span>Avg loss</span><strong>{review.summary.averageCentipawnLoss}</strong><small>centipawns</small></div>
                   <div><span>Best found</span><strong>{review.summary.bestMoveRate}%</strong><small>of moves</small></div>
                 </div>
-                {batchRetryItems.length > 0 && (
+                {batchRetryCandidates.length > 0 && (
                   <div className="review-practice-callout" aria-busy={retrySaving}>
                     <div>
                       <span>From your games</span>
-                      <strong>{batchRetryItems.length} key moment{batchRetryItems.length === 1 ? '' : 's'} ready to practise</strong>
+                      <strong>{Math.min(batchRetryCandidates.length, 3)} key moment{batchRetryCandidates.length === 1 ? '' : 's'} selected for practice</strong>
                       <small>Replay the saved Stockfish line without revealing it first.</small>
                     </div>
-                    <RetryPracticeButton className="primary-button" action="batch" savingAction={retrySavingAction} onClick={() => void queueRetryItems(batchRetryItems, 'batch')} />
+                    <RetryPracticeButton className="primary-button" action="batch" savingAction={retrySavingAction} onClick={practiceBatchRetries} />
                   </div>
                 )}
                 {review.summary.turningPoints.length > 0 && (
@@ -1479,8 +1522,8 @@ export function AnalysisWorkspace({
                     <p>{selectedReview.feedback}</p>
                     <small>Depth {selectedReview.depth} · {selectedReview.phase} · {selectedReview.confidence === 'limited' ? 'limited confidence' : 'normal confidence'}</small>
                     <CoachEvidenceCard guidance={coachGuidance} />
-                    {selectedRetryItem && (
-                      <RetryPracticeButton className="review-detail__practice secondary-button" action="single" savingAction={retrySavingAction} onClick={() => void queueRetryItems([selectedRetryItem], 'single')} />
+                    {selectedRetryEligible && (
+                      <RetryPracticeButton className="review-detail__practice secondary-button" action="single" savingAction={retrySavingAction} onClick={practiceSelectedRetry} />
                     )}
                   </article>
                 )}
