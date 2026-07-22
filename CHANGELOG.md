@@ -13,6 +13,7 @@
 - Bounded tactics progress plus immutable-attempt persistence in browser storage and SQLite schema v5, with deterministic reconciliation and atomic native attempt/progress recording
 - Explicit Review waiting state while a live bot move owns the local engine
 - Lower default bot budgets across browser and desktop: Easy/Balanced/Strong now cap at 4k/10k/24k nodes and 50/100/160 ms while preserving one-threaded named-profile behavior and display pacing
+- Play notation now uses memoized move rows plus one delegated selection handler, so long histories update only affected rows as moves arrive or players preview a position
 - Full-game Review now waits for a local saved-report lookup before it enables a costly rerun, and labels an intentional rerun clearly
 - Promotion dialogs now block Play shortcuts behind the modal while preserving Escape-to-cancel
 - Cancellable full-game Stockfish review with intermediate-position reuse, live ply progress and a safe Stop action
