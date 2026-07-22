@@ -316,6 +316,17 @@ function restoreSession(
   }
 }
 
+function customTimeDraftFor(control: TimeControl) {
+  if (control.category !== 'custom' || control.initialMs === null) {
+    return { base: '10', increment: '0', delay: '0' }
+  }
+  return {
+    base: String(control.initialMs / 60_000),
+    increment: String(control.incrementMs / 1_000),
+    delay: String(control.delayMs / 1_000),
+  }
+}
+
 interface PlayerBarProps {
   color: 'white' | 'black'
   name: string
@@ -389,9 +400,9 @@ export default function App() {
   const [engineStatus, setEngineStatus] = useState<EngineStatus>(desktop
     ? { kind: 'idle', message: 'Loads on your first bot move or when you verify it.' }
     : { kind: 'idle', message: 'Loads locally on your first bot move or when you verify it.' })
-  const [customBase, setCustomBase] = useState('10')
-  const [customIncrement, setCustomIncrement] = useState('0')
-  const [customDelay, setCustomDelay] = useState('0')
+  // These are draft-only values. A ref keeps typing local to the mounted
+  // inputs instead of re-rendering the full Play shell for every keypress.
+  const customTimeDraft = useRef(customTimeDraftFor(initial.timeControl))
   const [customTimeOpen, setCustomTimeOpen] = useState(initial.timeControl.category === 'custom')
   const [setupOpen, setSetupOpen] = useState(() => initial.game.history().length === 0)
   const [selected, setSelected] = useState<Square | null>(null)
@@ -1081,7 +1092,8 @@ export default function App() {
 
   const applyCustomTimeControl = () => {
     try {
-      changeTimeControl(createCustomTimeControl(Number(customBase), Number(customIncrement), Number(customDelay)))
+      const { base, increment, delay } = customTimeDraft.current
+      changeTimeControl(createCustomTimeControl(Number(base), Number(increment), Number(delay)))
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Invalid time control.')
     }
@@ -1159,6 +1171,8 @@ export default function App() {
           botClient.current?.cancel()
           clearPremove()
           setGame(next); setStartFen(restoredStartFen)
+          customTimeDraft.current = customTimeDraftFor(control)
+          setCustomTimeOpen(control.category === 'custom')
           setTimeControl(control); setClock(next.isGameOver() || restoredTermination ? pauseClock(restoredClock, now) : restoredClock)
           setClockHistory([]); setTermination(restoredTermination); setDecision(null)
           setupAutoCollapsed.current = next.history().length > 0
@@ -1267,6 +1281,8 @@ export default function App() {
         setGame(restored.game); setStartFen(restored.startFen); setMode(restored.mode)
         setBotLevel(restored.botLevel); setBotProfileId(restored.botProfileId); setOrientation(restored.orientation)
         setHumanColor(restored.humanColor); setColorChoice(restored.colorChoice)
+        customTimeDraft.current = customTimeDraftFor(restored.timeControl)
+        setCustomTimeOpen(restored.timeControl.category === 'custom')
         setTimeControl(restored.timeControl); setClock(restored.clock)
         setClockHistory(restored.clockHistory); setTermination(restored.termination)
         setupAutoCollapsed.current = restored.game.history().length > 0
@@ -1737,9 +1753,9 @@ export default function App() {
                     </label>
                     {customTimeOpen && (
                       <div className="custom-time" aria-label="Custom time control">
-                        <label><span>Minutes</span><input type="number" min="0.1" max="1440" step="0.1" value={customBase} onChange={(event) => setCustomBase(event.target.value)} /></label>
-                        <label><span>Increment</span><input type="number" min="0" max="600" value={customIncrement} onChange={(event) => setCustomIncrement(event.target.value)} /></label>
-                        <label><span>Delay</span><input type="number" min="0" max="600" value={customDelay} onChange={(event) => setCustomDelay(event.target.value)} /></label>
+                        <label><span>Minutes</span><input type="number" min="0.1" max="1440" step="0.1" defaultValue={customTimeDraft.current.base} onChange={(event) => { customTimeDraft.current.base = event.target.value }} /></label>
+                        <label><span>Increment</span><input type="number" min="0" max="600" defaultValue={customTimeDraft.current.increment} onChange={(event) => { customTimeDraft.current.increment = event.target.value }} /></label>
+                        <label><span>Delay</span><input type="number" min="0" max="600" defaultValue={customTimeDraft.current.delay} onChange={(event) => { customTimeDraft.current.delay = event.target.value }} /></label>
                         <button className="secondary-button" type="button" onClick={applyCustomTimeControl}>Use custom time</button>
                       </div>
                     )}

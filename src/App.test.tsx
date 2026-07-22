@@ -74,6 +74,31 @@ describe('bot player-side setup', () => {
     expect(markup).toContain('Premove mode: choose one black move while the bot thinks.')
     expect(markup).toContain('Rowan Pike')
   })
+
+  it('keeps a restored custom control editable at its saved values', () => {
+    const markup = renderApp({
+      pgn: '',
+      startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      mode: 'bot',
+      botLevel: 'balanced',
+      orientation: 'white',
+      humanColor: 'w',
+      colorChoice: 'white',
+      timeControl: {
+        id: 'custom-420000-3000-2000',
+        label: 'Custom · 7 min · +3 · 2s delay',
+        category: 'custom',
+        initialMs: 420_000,
+        incrementMs: 3_000,
+        delayMs: 2_000,
+      },
+    })
+
+    expect(markup).toContain('aria-label="Custom time control"')
+    expect(markup).toContain('min="0.1" max="1440" step="0.1" value="7"')
+    expect(markup).toContain('min="0" max="600" value="3"')
+    expect(markup).toContain('min="0" max="600" value="2"')
+  })
 })
 
 describe('local transfer convenience contracts', () => {

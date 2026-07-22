@@ -46,6 +46,8 @@ New game, time-control, mode, FEN-load and saved-game actions share one restart 
 
 Play setup uses progressive disclosure rather than permanently placing configuration ahead of the current game. A zero-ply session starts with the native setup disclosure open; the first recorded ply closes it once, leaving an original compact opponent/side/time summary, accessible Draw/Resign actions and notation above the fold. Restarting a fresh game opens it again, while a user who later reopens it keeps it open until another fresh session begins. The disclosure body is unmounted while closed, so inactive opponent, engine and time controls do not participate in ordinary in-game rendering.
 
+The custom-time form keeps its uncommitted minute, increment and delay text in a persistent ref-backed draft. Its native inputs therefore update themselves while typing rather than scheduling a root `App` render; closing and reopening the mounted form restores that draft, and clicking **Use custom time** remains the single validation/restart boundary. A restored custom control seeds the same fields from its persisted milliseconds so players can adjust the actual saved values.
+
 ### Workspace-navigation handoff
 
 A primary-workspace change is a navigation handoff, not a game-state action. After React has rendered a different Play, Review, Train or Library workspace, the shared handoff contract moves the window to the top and places programmatic focus on the current `#workspace-title` with `preventScroll`. The `<main>` landmark is named by that same title through `aria-labelledby="workspace-title"`, while the heading's `tabIndex={-1}` keeps it out of the ordinary tab sequence.
