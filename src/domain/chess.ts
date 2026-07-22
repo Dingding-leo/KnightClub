@@ -20,9 +20,13 @@ const pieceValues: Record<PieceSymbol, number> = {
   k: 0,
 }
 
-export function cloneGame(game: Chess, startFen = STANDARD_START_FEN): Chess {
+export function cloneGame(
+  game: Chess,
+  startFen = STANDARD_START_FEN,
+  verboseHistory: readonly Move[] = game.history({ verbose: true }),
+): Chess {
   const clone = new Chess(startFen)
-  for (const move of game.history({ verbose: true })) {
+  for (const move of verboseHistory) {
     clone.move({ from: move.from, to: move.to, promotion: move.promotion })
   }
   return clone

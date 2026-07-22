@@ -106,6 +106,7 @@
 - Decision dialogs settle and pause the clock, cancel engine work, and resume the same clock on cancel or decline
 - Completed games lock Undo and reopen from the Library with their exact non-board ending
 - Timed rerenders memoize history and PGN generation instead of rebuilding them every clock tick
+- A Play position now reuses one verbose history snapshot for notation and legal clone replay, and reuses its memoized current PGN for sharing and session persistence instead of rebuilding both during long moves
 - Game completion, engine cancellation and board locking now include timeout results
 - The clock display derives elapsed time in memory without writing local storage every tick
 - Responsive board sizing again respects viewport height in one-column layouts
@@ -118,6 +119,7 @@
 
 ### Verification
 
+- Play long-history cache pass: lint, typecheck, the 49-file / 233-test frontend suite, full 34-test Rust suite, production web build, local HTTP check and macOS `KnightClub.app` bundle passed. The clone equivalence contract proves an injected verbose history snapshot preserves FEN, SAN history and PGN; a manual long-game Play walkthrough remains release handoff work.
 - Progressive Play setup pass: lint, typecheck, the 49-file / 231-test frontend suite, full 32-test Rust suite, production web build, local HTTP check and macOS `KnightClub.app` bundle passed. SSR contracts cover fresh/open and restored/in-progress/collapsed setup plus persistent completion actions; first-ply/mobile interaction remains release handoff work.
 - Review/persistence performance pass: lint, typecheck, the 49-file / 230-test frontend suite, full 32-test Rust suite, production web build, local HTTP check and macOS `KnightClub.app` bundle passed. Deferred persistence contracts cover latest-snapshot coalescing, no active-write overlap, failure settlement, invalid-payload isolation and clear/FIFO barriers; the manual long-PGN Review responsiveness check remains release handoff work.
 - Play performance pass: lint, typecheck, the 47-file / 222-test frontend suite, full 32-test Rust suite, production web build, local HTTP check and macOS `KnightClub.app` bundle passed. Clock contracts cover normal/low-time/exact-flag frames; browser/native UCI fixtures prove the lower mirrored caps and unchanged bounded two-PV route. A manual low-time/drag/premove/keyboard walkthrough remains release handoff work.

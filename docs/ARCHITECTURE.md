@@ -48,6 +48,8 @@ Play setup uses progressive disclosure rather than permanently placing configura
 
 The custom-time form keeps its uncommitted minute, increment and delay text in a persistent ref-backed draft. Its native inputs therefore update themselves while typing rather than scheduling a root `App` render; closing and reopening the mounted form restores that draft, and clicking **Use custom time** remains the single validation/restart boundary. A restored custom control seeds the same fields from its persisted milliseconds so players can adjust the actual saved values.
 
+Every immutable Play `Chess` state exposes one verbose history snapshot. The SAN move list derives from that snapshot, and human commits, bot replies and undo reuse it when reconstructing a legal clone from the original start FEN. This preserves full replay/repetition semantics rather than cloning only the final FEN, while avoiding an additional complete `chess.js` history walk on long games. The current-game PGN is likewise memoized once per position and shared by transfer/session persistence; terminal export still rebuilds its result-aware headers deliberately.
+
 ### Workspace-navigation handoff
 
 A primary-workspace change is a navigation handoff, not a game-state action. After React has rendered a different Play, Review, Train or Library workspace, the shared handoff contract moves the window to the top and places programmatic focus on the current `#workspace-title` with `preventScroll`. The `<main>` landmark is named by that same title through `aria-labelledby="workspace-title"`, while the heading's `tabIndex={-1}` keeps it out of the ordinary tab sequence.

@@ -470,8 +470,8 @@ export default function App() {
     initial.game.isGameOver() || Boolean(initial.termination),
   ))
 
-  const history = useMemo(() => game.history(), [game])
   const verbose = useMemo(() => game.history({ verbose: true }), [game])
+  const history = useMemo(() => verbose.map((move) => move.san), [verbose])
   const tacticProgress = useMemo(
     () => tacticsStateToTacticProgress(tacticsState, SEED_TACTICS),
     [tacticsState],
@@ -518,10 +518,11 @@ export default function App() {
   const canUndo = !gameFinished && (mode !== 'bot' || verbose.some((move) => move.color === humanColor))
   const currentStatus = termination?.status ?? gameStatus(game)
   const currentResult = termination?.result ?? gameResult(game)
+  const livePgn = useMemo(() => game.pgn(), [game])
   const sharePgn = useMemo(() => gameFinished
     ? completedPgn(game, startFen, currentResult, currentStatus)
-    : game.pgn() || `[SetUp "1"]\n[FEN "${game.fen()}"]\n\n*`,
-  [game, gameFinished, startFen, currentResult, currentStatus])
+    : livePgn || `[SetUp "1"]\n[FEN "${game.fen()}"]\n\n*`,
+  [game, gameFinished, startFen, currentResult, currentStatus, livePgn])
 
   useEffect(() => {
     if (history.length === 0 || setupAutoCollapsed.current) return
@@ -946,7 +947,7 @@ export default function App() {
 
   const commit = (move: MoveInput) => {
     if (gameFinished || !clock.activeColor || !isHumanTurn(mode, game.turn(), humanColor)) return
-    const next = cloneGame(game, startFen)
+    const next = cloneGame(game, startFen, verbose)
     try { next.move(move) } catch { setNotice('Illegal move.'); return }
     const now = Date.now()
     try {
@@ -1055,7 +1056,7 @@ export default function App() {
     botRequestVersion.current += 1
     botClient.current?.cancel()
     clearPremove(); setThinking(false)
-    const next = cloneGame(game, startFen)
+    const next = cloneGame(game, startFen, verbose)
     if (!next.undo()) return
     if (next.history().length && shouldUndoBotReply(mode, next.turn(), humanColor)) next.undo()
     const targetPly = next.history().length
@@ -1313,7 +1314,7 @@ export default function App() {
 
   useEffect(() => {
     const session = {
-      pgn: termination ? sharePgn : game.pgn(), startFen, mode, botLevel, botProfileId, orientation, humanColor, colorChoice, timeControl, clock, clockHistory, termination,
+      pgn: sharePgn, startFen, mode, botLevel, botProfileId, orientation, humanColor, colorChoice, timeControl, clock, clockHistory, termination,
     }
     saveActiveSession(session)
     if (database && databaseReady) void database.saveActiveSession(session).catch(reportDatabaseError)
@@ -1364,7 +1365,7 @@ export default function App() {
       botLevel: mode === 'bot' ? botLevel : undefined,
       botProfileId: mode === 'bot' ? botProfileId : undefined,
       result: currentResult, pgn: sharePgn,
-      finalFen: game.fen(), moveCount: game.history().length,
+      finalFen: game.fen(), moveCount: history.length,
       timeControl, whiteTimeMs: terminalClock.whiteMs, blackTimeMs: terminalClock.blackMs,
       termination: termination ?? undefined,
       ...(mode === 'bot' ? { humanColor, colorChoice } : {}),
@@ -1372,7 +1373,7 @@ export default function App() {
     setLibrary(saveGame(item))
     if (database && databaseReady) void database.saveGame(item).catch(reportDatabaseError)
     savedPosition.current = terminalFingerprint
-  }, [game, mode, botLevel, botProfileId, humanColor, colorChoice, gameFinished, currentResult, sharePgn, timeControl, clock, termination, database, databaseReady, reportDatabaseError])
+  }, [game, mode, botLevel, botProfileId, humanColor, colorChoice, gameFinished, currentResult, sharePgn, history.length, timeControl, clock, termination, database, databaseReady, reportDatabaseError])
 
   useEffect(() => {
     const client = new HybridEngineClient()
@@ -1452,7 +1453,7 @@ export default function App() {
       await waitForPacing(Math.max(0, BOT_MOVE_DISPLAY_FLOOR_MS[botLevel] - (Date.now() - requestedAt)))
       if (version !== botRequestVersion.current) return
       if (game.fen() !== requestFen) return
-      let next = cloneGame(game, startFen)
+      let next = cloneGame(game, startFen, verbose)
       try {
         const now = Date.now()
         next.move(chosen.move)
@@ -1507,7 +1508,7 @@ export default function App() {
         release?.()
       }
     }
-  }, [game, mode, humanColor, botColor, botLevel, botProfile, engineSettings, startFen, gameFinished, decision, clock, desktop, playMoveSound, captureClockNow])
+  }, [game, mode, humanColor, botColor, botLevel, botProfile, engineSettings, startFen, gameFinished, decision, clock, desktop, playMoveSound, captureClockNow, verbose])
 
   const abortedGameCount = useMemo(() => library.filter((item) => item.moveCount === 0).length, [library])
   const visibleLibrary = useMemo(() => {
