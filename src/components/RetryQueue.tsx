@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chess, type PieceSymbol, type Square } from 'chess.js'
 import { ChevronLeft, ChevronRight, Eye, Lightbulb, RefreshCw, Target, Trash2 } from 'lucide-react'
 import { legalMovesFrom } from '../domain/chess'
 import { recordRetryAttempt, type RetryItem } from '../review/retry'
+import {
+  progressiveRetryQueue,
+  RETRY_QUEUE_PAGE_SIZE,
+  revealMoreRetryQueueItems,
+} from '../review/retryQueuePage'
 import {
   attemptRetryLineMove,
   createRetryLine,
@@ -63,6 +68,19 @@ function fallbackMoveNumberLabel(item: RetryItem): string {
   return `${number}${item.sideToMove === 'b' ? '…' : '.'}`
 }
 
+/**
+ * Picker rows need the move number, but replaying every stored solution just
+ * for that label is costly. Fullmove and side-to-move are already durable FEN
+ * facts; retain the source-ply fallback only for malformed legacy metadata.
+ */
+function pickerMoveNumberLabel(item: RetryItem): string {
+  const fullmove = Number(item.preFen.trim().split(/\s+/)[5])
+  if (Number.isInteger(fullmove) && fullmove >= 1) {
+    return `${fullmove}${item.sideToMove === 'b' ? '…' : '.'}`
+  }
+  return fallbackMoveNumberLabel(item)
+}
+
 function retryTimingLabel(dueAt: string, nowAt: string): string {
   const due = new Date(dueAt)
   const now = new Date(nowAt)
@@ -82,8 +100,16 @@ function playerMovesCompleted(line: ReturnType<typeof createRetryLine>, complete
 
 export function RetryQueue({ items, requestedRetryKey, onSave, onDelete, onBackToReview, onOpenReview }: RetryQueueProps) {
   const queue = useMemo(() => activeQueue(items, requestedRetryKey), [items, requestedRetryKey])
-  const retryLines = useMemo(() => new Map(queue.map((item) => [item.retryKey, createRetryLine(item)])), [queue])
   const [currentKey, setCurrentKey] = useState(() => initialKey(queue, requestedRetryKey))
+  const [revealCount, setRevealCount] = useState(RETRY_QUEUE_PAGE_SIZE)
+  const current = queue.find((item) => item.retryKey === currentKey) ?? queue[0] ?? null
+  const queuePage = useMemo(
+    () => progressiveRetryQueue(queue, revealCount, [current?.retryKey, requestedRetryKey]),
+    [current?.retryKey, queue, requestedRetryKey, revealCount],
+  )
+  // A retry line replays chess.js moves, so reconstruct only the position the
+  // player is actively practising. Picker labels use durable item metadata.
+  const line = useMemo(() => current ? createRetryLine(current) : null, [current])
   const [boardFen, setBoardFen] = useState(() => {
     const item = queue.find((candidate) => candidate.retryKey === initialKey(queue, requestedRetryKey)) ?? queue[0]
     return item?.preFen ?? ''
@@ -99,9 +125,7 @@ export function RetryQueue({ items, requestedRetryKey, onSave, onDelete, onBackT
   const [saveError, setSaveError] = useState('')
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
-
-  const current = queue.find((item) => item.retryKey === currentKey) ?? queue[0] ?? null
-  const line = current ? retryLines.get(current.retryKey) ?? null : null
+  const handledRequestedRetry = useRef<string | null>(null)
   const board = useMemo(() => {
     if (!current) return null
     try {
@@ -124,10 +148,8 @@ export function RetryQueue({ items, requestedRetryKey, onSave, onDelete, onBackT
 
   const resetExercise = (item = current) => {
     if (!item) return
-    const itemLine = createRetryLine(item)
-    const start = itemLine ? retryLinePosition(itemLine, 0) : null
     setCurrentKey(item.retryKey)
-    setBoardFen(start?.fen ?? item.preFen)
+    setBoardFen(item.preFen)
     setCompletedPlies(0)
     setLastRecordedMove(null)
     setSelected(null)
@@ -149,13 +171,20 @@ export function RetryQueue({ items, requestedRetryKey, onSave, onDelete, onBackT
   }, [current?.retryKey, currentKey, queue, requestedRetryKey])
 
   useEffect(() => {
-    if (!requestedRetryKey) return
+    if (!requestedRetryKey) {
+      handledRequestedRetry.current = null
+      return
+    }
+    if (handledRequestedRetry.current === requestedRetryKey) return
     const requested = queue.find((item) => item.retryKey === requestedRetryKey)
-    if (requested) resetExercise(requested)
+    if (!requested) return
+    resetExercise(requested)
+    handledRequestedRetry.current = requestedRetryKey
   // A review action intentionally opens the requested item even if another
-  // current exercise is already mounted.
+  // current exercise is already mounted. Waiting for the item also supports
+  // desktop hydration without re-opening it after the player picks another.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestedRetryKey])
+  }, [queue, requestedRetryKey])
 
   useEffect(() => {
     if (!current) return
@@ -378,21 +407,29 @@ export function RetryQueue({ items, requestedRetryKey, onSave, onDelete, onBackT
       </div>
 
       {queue.length > 1 && (
-        <div className="retry-queue__items" aria-label="Practice positions">
-          {queue.map((item) => {
-            const itemLine = retryLines.get(item.retryKey)
-            const itemMove = itemLine?.moves[0]
-            return (
+        <div className="retry-queue__items-section">
+          <div className="retry-queue__items" aria-label="Practice positions">
+            {queuePage.items.map((item) => (
               <button
                 type="button"
                 key={item.retryKey}
+                data-retry-key={item.retryKey}
                 className={item.retryKey === current.retryKey ? 'is-current' : ''}
                 aria-current={item.retryKey === current.retryKey ? 'step' : undefined}
                 onClick={() => resetExercise(item)}
                 disabled={saving || deleting}
-              >Move {itemMove ? moveNumberLabel(itemMove) : fallbackMoveNumberLabel(item)}<span>{item.classification}</span></button>
-            )
-          })}
+              >Move {pickerMoveNumberLabel(item)}<span>{item.classification}</span></button>
+            ))}
+          </div>
+          {queuePage.remainingCount > 0 && (
+            <button
+              className="retry-queue__show-more secondary-button"
+              type="button"
+              onClick={() => setRevealCount((count) => revealMoreRetryQueueItems(count, queuePage.totalCount))}
+              disabled={saving || deleting}
+              aria-label={`Show ${Math.min(RETRY_QUEUE_PAGE_SIZE, queuePage.remainingCount)} more practice positions; ${queuePage.remainingCount} remaining`}
+            >Show {Math.min(RETRY_QUEUE_PAGE_SIZE, queuePage.remainingCount)} more positions <span>{queuePage.remainingCount} remaining</span></button>
+          )}
         </div>
       )}
 

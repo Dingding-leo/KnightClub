@@ -13,6 +13,7 @@ import {
 import { createPgnTimeline } from '../analysis/analysisModel'
 import { resolvePlayPreviewReviewPly } from '../review/playPreviewReviewTarget'
 import { liveGameContinuation } from '../review/liveGameContinuation'
+import { createInitialWorkspaceState, liveTimelineFor } from '../review/reviewWorkspaceState'
 import type { CoachGuidance } from '../review/coach'
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { GameReview } from '../review/gameReviewRunner'
@@ -59,6 +60,47 @@ function retryItem(retryKey: string): RetryItem {
 }
 
 describe('analysis workspace convenience contracts', () => {
+  it('parses the initial Review game once while preserving an exact Play preview target', () => {
+    const currentPgn = '1. e4 e5 2. Nf3 Nc6'
+    const expected = createPgnTimeline(currentPgn)
+    const target = { sourcePly: 2, expectedFen: expected.positions[2]!.fen }
+    const parseTimeline = vi.fn(createPgnTimeline)
+
+    const initial = createInitialWorkspaceState(currentPgn, null, target, parseTimeline)
+
+    expect(parseTimeline).toHaveBeenCalledOnce()
+    expect(parseTimeline).toHaveBeenCalledWith(currentPgn)
+    expect(initial.timeline.moves).toHaveLength(4)
+    expect(initial.ply).toBe(target.sourcePly)
+
+    // An explicit Train-to-Review target wins over the transient Play preview,
+    // exactly as it did before the shared initialization path.
+    const reviewTarget = createInitialWorkspaceState(
+      currentPgn,
+      { reviewKey: '0123456789abcdef', sourcePly: 1 },
+      target,
+      createPgnTimeline,
+    )
+    expect(reviewTarget.ply).toBe(4)
+  })
+
+  it('reuses an unchanged normalized current PGN but reparses an extended game for continuation detection', () => {
+    const reviewPgn = '1. e4 e5 2. Nf3'
+    const reviewTimeline = createPgnTimeline(reviewPgn)
+    const parseTimeline = vi.fn(createPgnTimeline)
+
+    const unchanged = liveTimelineFor(`\n${reviewPgn}\n`, reviewTimeline, parseTimeline)
+    expect(unchanged).toBe(reviewTimeline)
+    expect(parseTimeline).not.toHaveBeenCalled()
+
+    const extendedPgn = '1. e4 e5 2. Nf3 Nc6'
+    const extended = liveTimelineFor(extendedPgn, reviewTimeline, parseTimeline)
+    expect(parseTimeline).toHaveBeenCalledOnce()
+    expect(parseTimeline).toHaveBeenCalledWith(extendedPgn)
+    expect(extended).not.toBe(reviewTimeline)
+    expect(liveGameContinuation(reviewTimeline, extended)).toMatchObject({ addedPly: 1 })
+  })
+
   it('keeps Review notation and the mobile move picker addressable without per-control callbacks', () => {
     const timeline = createPgnTimeline('1. e4 e5 2. Nf3 Nc6')
     const [e4, e5, knightF3, knightC6] = timeline.moves

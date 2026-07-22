@@ -48,7 +48,6 @@ import { disposeAndClearClient } from '../analysis/clientLifecycle'
 import { readAnalysisFile } from '../analysis/fileImport'
 import { createLatestRequestGate } from '../analysis/latestRequest'
 import { inertAnalysisBoardInteraction } from '../analysis/analysisBoardInteraction'
-import { STANDARD_START_FEN } from '../domain/chess'
 import { copyText, downloadText } from '../domain/textTransfer'
 import { runGameReview, type GameReview, type ReviewProgress } from '../review/gameReviewRunner'
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
@@ -64,6 +63,11 @@ import {
   resolvePlayPreviewReviewPly,
   type PlayPreviewReviewTarget,
 } from '../review/playPreviewReviewTarget'
+import {
+  createInitialWorkspaceState,
+  liveTimelineFor,
+  type RequestedReviewTarget,
+} from '../review/reviewWorkspaceState'
 import {
   liveGameContinuation,
   type LiveGameContinuation,
@@ -96,7 +100,7 @@ interface AnalysisWorkspaceProps {
   }
   onRetriesSaved?: (items: RetryItem[]) => void
   onOpenRetryQueue?: (retryKey: string) => void
-  requestedReviewTarget?: { reviewKey: string; sourcePly: number } | null
+  requestedReviewTarget?: RequestedReviewTarget | null
   onRequestedReviewTargetHandled?: () => void
   requestedPlayPreviewTarget?: PlayPreviewReviewTarget | null
   onRequestedPlayPreviewTargetHandled?: () => void
@@ -208,14 +212,6 @@ const effortOptions = {
 } as const
 
 type Effort = keyof typeof effortOptions
-
-function safeTimeline(pgn: string): AnalysisTimeline {
-  try {
-    return createPgnTimeline(pgn)
-  } catch {
-    return createFenTimeline(STANDARD_START_FEN)
-  }
-}
 
 function compactNumber(value: number | null): string {
   if (value === null) return '—'
@@ -439,15 +435,13 @@ export function AnalysisWorkspace({
   requestedPlayPreviewTarget,
   onRequestedPlayPreviewTargetHandled,
 }: AnalysisWorkspaceProps) {
-  const [timeline, setTimeline] = useState(() => safeTimeline(currentPgn))
-  const [ply, setPly] = useState(() => {
-    const initialTimeline = safeTimeline(currentPgn)
-    if (!requestedReviewTarget) {
-      const previewPly = resolvePlayPreviewReviewPly(initialTimeline, requestedPlayPreviewTarget)
-      if (previewPly !== null) return previewPly
-    }
-    return initialTimeline.positions.length - 1
-  })
+  const [initialWorkspace] = useState(() => createInitialWorkspaceState(
+    currentPgn,
+    requestedReviewTarget,
+    requestedPlayPreviewTarget,
+  ))
+  const [timeline, setTimeline] = useState(initialWorkspace.timeline)
+  const [ply, setPly] = useState(initialWorkspace.ply)
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
   const [pgnInput, setPgnInput] = useState(currentPgn)
   const [fenInput, setFenInput] = useState('')
@@ -486,7 +480,10 @@ export function AnalysisWorkspace({
 
   const position = timeline.positions[ply] ?? timeline.positions[0]
   const boardGame = useMemo(() => new Chess(position.fen), [position.fen])
-  const liveTimeline = useMemo(() => safeTimeline(currentPgn), [currentPgn])
+  const liveTimeline = useMemo(
+    () => liveTimelineFor(currentPgn, timeline),
+    [currentPgn, timeline],
+  )
   const liveContinuation = useMemo(
     () => liveGameContinuation(timeline, liveTimeline),
     [liveTimeline, timeline],
@@ -790,7 +787,7 @@ export function AnalysisWorkspace({
     reviewLoadVersion.current += 1
     const controller = new AbortController()
     reviewAbort.current = controller
-    reviewClient.current ??= new StockfishAnalysisClient(undefined, Date.now() + 1_000_000)
+    reviewClient.current ??= new StockfishAnalysisClient()
     const selectedEffort = effortOptions[effort]
     const settings: AnalysisSettings = {
       moveTimeMs: selectedEffort.moveTimeMs,

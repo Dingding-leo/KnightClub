@@ -48,8 +48,8 @@ impl From<std::io::Error> for EngineError {
 
 // Play requests come from one monotonically increasing frontend client. A
 // delayed stop for an older request must never revive a newer cancelled search.
-// Analysis intentionally keeps exact-ID cancellation because its callers use
-// independent, non-monotonic request sequences.
+// Analysis uses exact-ID cancellation because concurrent jobs can overlap and
+// stop delivery need not match their completion order.
 fn is_play_request_cancelled(request_id: u64, cancelled_through: &AtomicU64) -> bool {
     request_id <= cancelled_through.load(Ordering::Acquire)
 }
@@ -59,11 +59,13 @@ fn record_play_cancellation(cancelled_through: &AtomicU64, request_id: u64) {
 }
 
 /**
- * Analysis clients deliberately use independent request-ID ranges, so a
- * single numeric watermark cannot safely represent their cancellations. Keep
- * exact request IDs instead: a delayed old stop can add its own marker but
- * cannot remove a newer request's marker. IDs are client-lifetime values, so
- * retaining them is safer than dropping a pre-cancelled queued request.
+ * Analysis cancellation is exact-ID rather than a numeric watermark. Even
+ * though the production renderer allocates increasing IDs, independent jobs
+ * can overlap and stop delivery need not match job completion order; one
+ * request must never cancel another. A marker is consumed by its own request,
+ * and any marker already present at request completion is cleared. That
+ * protects a pre-cancelled queued request without retaining normal
+ * cancellations for the whole app.
  */
 #[derive(Default)]
 struct AnalysisCancellationRegistry {
@@ -75,18 +77,41 @@ impl AnalysisCancellationRegistry {
         self.cancelled.insert(request_id);
     }
 
-    fn is_cancelled(&self, request_id: u64) -> bool {
-        self.cancelled.contains(&request_id)
+    /// Atomically consumes a stop marker for the request which observes it.
+    ///
+    /// A cancellation can arrive before a queued `stockfish_analyze` command
+    /// reaches the engine mutex. Keeping the marker until that request takes
+    /// it preserves that pre-cancelled fence, while removing it at the point
+    /// of observation releases a normal navigation cancellation immediately.
+    fn take(&mut self, request_id: u64) -> bool {
+        self.cancelled.remove(&request_id)
+    }
+
+    /// Clears a marker which raced with a completed request. This is invoked
+    /// only after that request has returned from the UCI supervisor, never by
+    /// a newer request, so an exact-ID delayed stop cannot clear another
+    /// request's cancellation.
+    fn clear(&mut self, request_id: u64) {
+        self.cancelled.remove(&request_id);
     }
 }
 
-fn is_analysis_request_cancelled(
+fn take_analysis_request_cancellation(
     request_id: u64,
     cancelled_requests: &Mutex<AnalysisCancellationRegistry>,
 ) -> bool {
     cancelled_requests
         .lock()
-        .map_or(true, |registry| registry.is_cancelled(request_id))
+        .map_or(true, |mut registry| registry.take(request_id))
+}
+
+fn clear_analysis_request_cancellation(
+    request_id: u64,
+    cancelled_requests: &Mutex<AnalysisCancellationRegistry>,
+) {
+    if let Ok(mut registry) = cancelled_requests.lock() {
+        registry.clear(request_id);
+    }
 }
 
 fn record_analysis_cancellation(
@@ -1334,61 +1359,76 @@ fn stockfish_analyze_blocking(
     state: &AnalysisState,
     request: AnalysisRequest,
 ) -> Result<AnalysisResponse, String> {
-    if is_analysis_request_cancelled(request.request_id, state.cancelled_requests.as_ref()) {
-        return Err(EngineError::Cancelled.to_string());
-    }
-    let path = discover_for_app(request.engine_path).map_err(|error| error.to_string())?;
-    let settings =
-        resolve_analysis_settings(request.settings).map_err(|error| error.to_string())?;
-    let mut guard = state
-        .engine
-        .lock()
-        .map_err(|_| "Stockfish analysis lock was poisoned".to_owned())?;
-    if is_analysis_request_cancelled(request.request_id, state.cancelled_requests.as_ref()) {
-        return Err(EngineError::Cancelled.to_string());
-    }
-    if guard.as_ref().map(|engine| engine.path.as_path()) != Some(path.as_path()) {
-        *guard = Some(ManagedEngine {
-            path: path.clone(),
-            supervisor: EngineSupervisor::new(path.clone()),
-        });
-    }
-    let identity = match guard
-        .as_mut()
-        .expect("managed analysis engine initialized")
-        .supervisor
-        .initialize(Duration::from_secs(3))
-    {
-        Ok(identity) => identity,
-        Err(error) => {
-            *guard = None;
-            return Err(error.to_string());
-        }
-    };
-    let managed = guard.as_mut().expect("managed analysis engine initialized");
-    let timeout = Duration::from_millis(settings.move_time_ms.saturating_add(3_000));
     let request_id = request.request_id;
-    let cancelled_requests = state.cancelled_requests.clone();
-    let outcome = match managed
-        .supervisor
-        .analyze(&request.fen, &settings, timeout, move || {
-            is_analysis_request_cancelled(request_id, cancelled_requests.as_ref())
-        }) {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            *guard = None;
-            return Err(error.to_string());
+    let result: Result<AnalysisResponse, String> = (|| {
+        // This first fence handles a stop that beat the spawned blocking task
+        // to this function. `take` deliberately consumes only this request's
+        // exact marker; it cannot clear a newer client's cancellation.
+        if take_analysis_request_cancellation(request_id, state.cancelled_requests.as_ref()) {
+            return Err(EngineError::Cancelled.to_string());
         }
-    };
-    Ok(AnalysisResponse {
-        request_id: request.request_id,
-        fen: request.fen,
-        engine_name: identity.name,
-        engine_path: path.display().to_string(),
-        elapsed_ms: outcome.elapsed_ms,
-        best_move: outcome.best_move,
-        lines: outcome.lines,
-    })
+        let path = discover_for_app(request.engine_path).map_err(|error| error.to_string())?;
+        let settings =
+            resolve_analysis_settings(request.settings).map_err(|error| error.to_string())?;
+        let mut guard = state
+            .engine
+            .lock()
+            .map_err(|_| "Stockfish analysis lock was poisoned".to_owned())?;
+        // A request can wait behind another analysis while a stop arrives.
+        // Do not initialize or send UCI work after that wait if it was
+        // cancelled; consuming the marker here is the mutex-queue fence.
+        if take_analysis_request_cancellation(request_id, state.cancelled_requests.as_ref()) {
+            return Err(EngineError::Cancelled.to_string());
+        }
+        if guard.as_ref().map(|engine| engine.path.as_path()) != Some(path.as_path()) {
+            *guard = Some(ManagedEngine {
+                path: path.clone(),
+                supervisor: EngineSupervisor::new(path.clone()),
+            });
+        }
+        let identity = match guard
+            .as_mut()
+            .expect("managed analysis engine initialized")
+            .supervisor
+            .initialize(Duration::from_secs(3))
+        {
+            Ok(identity) => identity,
+            Err(error) => {
+                *guard = None;
+                return Err(error.to_string());
+            }
+        };
+        let managed = guard.as_mut().expect("managed analysis engine initialized");
+        let timeout = Duration::from_millis(settings.move_time_ms.saturating_add(3_000));
+        let cancelled_requests = state.cancelled_requests.clone();
+        let outcome =
+            match managed
+                .supervisor
+                .analyze(&request.fen, &settings, timeout, move || {
+                    take_analysis_request_cancellation(request_id, cancelled_requests.as_ref())
+                }) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    *guard = None;
+                    return Err(error.to_string());
+                }
+            };
+        Ok(AnalysisResponse {
+            request_id,
+            fen: request.fen,
+            engine_name: identity.name,
+            engine_path: path.display().to_string(),
+            elapsed_ms: outcome.elapsed_ms,
+            best_move: outcome.best_move,
+            lines: outcome.lines,
+        })
+    })();
+
+    // A stop may race with one of the completion paths above. Once this task
+    // has left the supervisor it cannot start any more UCI work, so drop its
+    // exact marker rather than retaining it for the lifetime of the app.
+    clear_analysis_request_cancellation(request_id, state.cancelled_requests.as_ref());
+    result
 }
 
 #[tauri::command]
@@ -1399,6 +1439,22 @@ pub fn stockfish_analysis_stop(state: State<'_, AnalysisState>, request_id: u64)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cancelled_analysis_request(request_id: u64) -> AnalysisRequest {
+        AnalysisRequest {
+            request_id,
+            fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".into(),
+            engine_path: Some(PathBuf::from("/not-used-for-a-cancelled-request")),
+            settings: AnalysisSettingsRequest {
+                move_time_ms: 250,
+                depth: Some(12),
+                nodes: None,
+                multi_pv: 1,
+                threads: 1,
+                hash_mb: 16,
+            },
+        }
+    }
 
     #[test]
     fn keeps_newest_play_cancellation_when_an_older_stop_arrives_late() {
@@ -1413,42 +1469,132 @@ mod tests {
     }
 
     #[test]
-    fn keeps_newer_analysis_cancellation_when_an_older_stop_arrives_late() {
+    fn consuming_an_older_analysis_stop_keeps_a_newer_exact_stop() {
         let cancelled_requests = Mutex::new(AnalysisCancellationRegistry::default());
 
-        // IDs intentionally do not imply creation order: separate analysis
-        // clients allocate independent ranges. The late old stop is larger.
-        record_analysis_cancellation(10, &cancelled_requests);
+        // The newer request is cancelled first, then an old stop arrives
+        // late. Exact consumption of the old marker must preserve the newer
+        // request's marker regardless of numeric ordering.
         record_analysis_cancellation(1_000_000, &cancelled_requests);
+        record_analysis_cancellation(10, &cancelled_requests);
 
-        assert!(is_analysis_request_cancelled(10, &cancelled_requests));
-        assert!(is_analysis_request_cancelled(
+        assert!(take_analysis_request_cancellation(10, &cancelled_requests));
+        assert!(take_analysis_request_cancellation(
             1_000_000,
             &cancelled_requests
         ));
-        assert!(!is_analysis_request_cancelled(99, &cancelled_requests));
+        assert!(!take_analysis_request_cancellation(99, &cancelled_requests));
+        assert!(
+            cancelled_requests
+                .lock()
+                .expect("cancellation registry")
+                .cancelled
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn analysis_cancellation_markers_are_released_after_observation() {
+        let cancelled_requests = Mutex::new(AnalysisCancellationRegistry::default());
+
+        for request_id in 1..=10_000 {
+            record_analysis_cancellation(request_id, &cancelled_requests);
+            assert!(take_analysis_request_cancellation(
+                request_id,
+                &cancelled_requests
+            ));
+        }
+
+        assert!(
+            cancelled_requests
+                .lock()
+                .expect("cancellation registry")
+                .cancelled
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn completion_cleanup_releases_only_its_own_racing_marker() {
+        let cancelled_requests = Mutex::new(AnalysisCancellationRegistry::default());
+        record_analysis_cancellation(10, &cancelled_requests);
+        record_analysis_cancellation(1_000_000, &cancelled_requests);
+
+        clear_analysis_request_cancellation(10, &cancelled_requests);
+
+        assert!(take_analysis_request_cancellation(
+            1_000_000,
+            &cancelled_requests
+        ));
+        assert!(
+            cancelled_requests
+                .lock()
+                .expect("cancellation registry")
+                .cancelled
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn queued_analysis_stop_survives_until_the_post_mutex_fence() {
+        let state = AnalysisState::default();
+        let queued_request_id = 77;
+
+        // This is the first fence in `stockfish_analyze_blocking`. There is
+        // no cancellation yet, then the request waits on the engine mutex.
+        assert!(!take_analysis_request_cancellation(
+            queued_request_id,
+            state.cancelled_requests.as_ref()
+        ));
+        let held_engine = state.engine.lock().expect("hold analysis engine mutex");
+        record_analysis_cancellation(queued_request_id, state.cancelled_requests.as_ref());
+
+        // The marker remains while the request is queued, so the second
+        // fence immediately after acquiring the mutex consumes it before
+        // `initialize`, `position`, or `go` can run.
+        assert!(
+            state
+                .cancelled_requests
+                .lock()
+                .expect("cancellation registry")
+                .cancelled
+                .contains(&queued_request_id)
+        );
+        drop(held_engine);
+        assert!(take_analysis_request_cancellation(
+            queued_request_id,
+            state.cancelled_requests.as_ref()
+        ));
+        assert!(
+            state
+                .cancelled_requests
+                .lock()
+                .expect("cancellation registry")
+                .cancelled
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn pre_cancelled_analysis_does_not_create_an_engine_and_is_cleaned_up() {
+        let cancelled_requests = Arc::new(Mutex::new(AnalysisCancellationRegistry::default()));
+        let request_id = 10;
+        record_analysis_cancellation(request_id, cancelled_requests.as_ref());
 
         let state = AnalysisState {
             engine: Arc::new(Mutex::new(None)),
-            cancelled_requests: Arc::new(cancelled_requests),
+            cancelled_requests: cancelled_requests.clone(),
         };
-        let error = stockfish_analyze_blocking(
-            &state,
-            AnalysisRequest {
-                request_id: 10,
-                fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".into(),
-                engine_path: Some(PathBuf::from("/not-used-for-a-cancelled-request")),
-                settings: AnalysisSettingsRequest {
-                    move_time_ms: 250,
-                    depth: Some(12),
-                    nodes: None,
-                    multi_pv: 1,
-                    threads: 1,
-                    hash_mb: 16,
-                },
-            },
-        )
-        .expect_err("the newer cancellation remains authoritative");
+        let error = stockfish_analyze_blocking(&state, cancelled_analysis_request(request_id))
+            .expect_err("the pre-cancelled request never reaches engine startup");
         assert_eq!(error, EngineError::Cancelled.to_string());
+        assert!(state.engine.lock().expect("analysis engine").is_none());
+        assert!(
+            cancelled_requests
+                .lock()
+                .expect("cancellation registry")
+                .cancelled
+                .is_empty()
+        );
     }
 }

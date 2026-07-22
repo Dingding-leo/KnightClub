@@ -4,6 +4,8 @@
 
 ### Added
 
+- Personal **From your games** queues now render a 24-position picker window with an explicit **Show N more positions** action, preserve a current/requested deep item in that window and use 44 px phone targets
+- Review now initializes its timeline and selected position from one shared PGN parse, then reuses that timeline for an unchanged live game
 - Named local opponents now receive two principal variations from one existing bounded play search and may select only a legal, exact-centipawn, close second line that demonstrably fits their declared forcing, classical or pressure preference
 - Play candidate selection is fail-closed: Stockfish’s original `bestmove` is retained for limited-strength PV mismatches, mates, score bounds, excessive score loss, stale/illegal candidates and all KnightBot fallbacks
 - Native UCI and browser WebAssembly play contracts now return safely normalized candidate telemetry without adding a second `go`, changing the single-thread setting, or raising the selected move-time/node cap
@@ -86,6 +88,8 @@
 
 ### Changed
 
+- Personal retry queues now reconstruct `chess.js` lines only for the active exercise; unopened selector labels derive from persisted FEN fullmove facts instead of replaying every saved PV
+- Native analysis clients now allocate renderer-wide increasing request IDs, consume exact cancellation markers at each cancellation fence and clear them when their blocking task settles
 - The KnightClub GitHub repository is now canonically `Dingding-leo/KnightClub`, matching the local package, desktop bundle and published metadata
 - The reproducible Sites build now uses a tracked static-worker source rather than a machine-local deployment helper
 - Revisiting an exact interactive Review position now returns a clearly labelled bounded local cache result instead of launching another Stockfish search; cache identity includes runtime, configured path, FEN and normalized settings, and full-game review remains uncached

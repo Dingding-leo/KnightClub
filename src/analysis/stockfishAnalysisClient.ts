@@ -49,6 +49,24 @@ export const DEFAULT_ANALYSIS_SETTINGS: AnalysisSettings = {
 
 const defaultInvoke: Invoke = (command, args) => tauriInvoke(command, args)
 
+// Desktop cancellation uses exact request IDs. All analysis clients in this
+// renderer therefore allocate from one sequence instead of each seeding from
+// Date.now(); a delayed stop from a disposed client can never collide with a
+// new interactive or full-review request in the same app session.
+let nextGlobalAnalysisRequestId = Math.max(1, Date.now())
+
+function allocateAnalysisRequestId(): number {
+  // Reaching this limit would require more than eight quadrillion analysis
+  // requests in one renderer session. Fail closed rather than wrap and risk a
+  // collision with a stale native cancellation marker.
+  if (nextGlobalAnalysisRequestId >= Number.MAX_SAFE_INTEGER) {
+    throw new Error('Analysis request ID space is exhausted. Restart KnightClub.')
+  }
+  const requestId = nextGlobalAnalysisRequestId
+  nextGlobalAnalysisRequestId += 1
+  return requestId
+}
+
 function abortError(message: string): Error {
   return new DOMException(message, 'AbortError')
 }
@@ -125,14 +143,16 @@ export function normalizeAnalysisSettings(value: Partial<AnalysisSettings>): Ana
 export class StockfishAnalysisClient {
   private readonly invoke: Invoke | null
   private readonly browser: BrowserStockfishEngine | null
-  private nextRequestId: number
+  private nextRequestId: number | null
   private activeRequestId: number | null = null
 
-  constructor(invoke?: Invoke, initialRequestId = Date.now()) {
+  constructor(invoke?: Invoke, initialRequestId?: number) {
     const desktop = isTauriRuntime()
     this.invoke = invoke ?? (desktop ? defaultInvoke : null)
     this.browser = invoke || desktop ? null : new BrowserStockfishEngine()
-    this.nextRequestId = initialRequestId
+    // Tests can still supply a deterministic local range. Production clients
+    // share the module-level allocator above.
+    this.nextRequestId = initialRequestId ?? null
   }
 
   async analyze(
@@ -141,7 +161,9 @@ export class StockfishAnalysisClient {
     settings: AnalysisSettings = DEFAULT_ANALYSIS_SETTINGS,
   ): Promise<AnalysisResponse> {
     this.cancel()
-    const requestId = this.nextRequestId++
+    const requestId = this.nextRequestId === null
+      ? allocateAnalysisRequestId()
+      : this.nextRequestId++
     this.activeRequestId = requestId
     const normalized = normalizeAnalysisSettings(settings)
     let raw: unknown

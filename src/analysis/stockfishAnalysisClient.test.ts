@@ -45,6 +45,23 @@ describe('StockfishAnalysisClient', () => {
     })
   })
 
+  it('gives independent production clients one shared increasing request-id sequence', async () => {
+    const requestIds: number[] = []
+    const invoke = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+      const request = args?.request as { requestId: number }
+      requestIds.push(request.requestId)
+      return response({ requestId: request.requestId })
+    })
+    const ambient = new StockfishAnalysisClient(invoke)
+    const review = new StockfishAnalysisClient(invoke)
+
+    await ambient.analyze(fen, null)
+    await review.analyze(fen, null)
+
+    expect(requestIds).toHaveLength(2)
+    expect(requestIds[1]).toBe(requestIds[0] + 1)
+  })
+
   it('rejects stale IDs and FENs before exposing engine lines', async () => {
     const staleId = new StockfishAnalysisClient(vi.fn(async () => response({ requestId: 11 })), 10)
     await expect(staleId.analyze(fen, null)).rejects.toMatchObject({ name: 'AbortError' })

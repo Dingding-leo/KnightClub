@@ -1502,11 +1502,14 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
 .retry-queue__heading-actions .secondary-button { min-height: 31px; padding: 0 9px; font-size: 10px; }
 .retry-queue__heading output { min-height: 31px; padding: 0 10px; border: 1px solid rgba(89, 195, 245, .25); border-radius: 999px; background: rgba(89, 195, 245, .09); color: #a8dafa; display: inline-flex; align-items: center; font-size: 10px; font-weight: 850; white-space: nowrap; }
 
-.retry-queue__items { grid-area: items; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; }
+.retry-queue__items-section { grid-area: items; display: grid; justify-items: start; gap: 8px; min-width: 0; }
+.retry-queue__items { width: 100%; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; }
 .retry-queue__items button { min-height: 35px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 255, 255, .025); color: var(--muted-strong); display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 750; white-space: nowrap; cursor: pointer; text-transform: capitalize; }
 .retry-queue__items button:hover,
 .retry-queue__items button.is-current { border-color: rgba(89, 195, 245, .42); background: rgba(89, 195, 245, .09); color: var(--text); }
 .retry-queue__items button span { color: var(--muted); font-size: 9px; }
+.retry-queue__show-more { min-height: 31px; padding: 0 10px; font-size: 10px; }
+.retry-queue__show-more span { color: var(--muted); font-size: 9px; }
 
 .retry-queue__board { grid-area: board; min-width: 0; width: min(100%, 570px); justify-self: center; }
 .retry-queue__panel { grid-area: panel; min-height: 100%; padding: 15px; border: 1px solid rgba(255, 255, 255, .075); border-radius: 12px; background: rgba(9, 13, 10, .38); display: grid; align-content: start; gap: 11px; }
@@ -1849,6 +1852,8 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
   .analysis-mobile-move-picker > span { color: var(--muted); font-size: 10px; font-weight: 750; }
   .analysis-mobile-move-picker select { min-height: 44px; }
   .retry-queue { grid-template-columns: 1fr; grid-template-areas: "heading" "items" "board" "panel" "promotion"; }
+  .retry-queue__items button,
+  .retry-queue__show-more { min-height: 44px; }
   .retry-queue__board { width: min(100%, 620px); }
   .train-source-tabs { grid-template-columns: 1fr; gap: 3px; }
   .train-source-tabs button { justify-content: flex-start; padding: 7px 11px; }

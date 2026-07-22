@@ -1,7 +1,21 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { RetryQueue } from './RetryQueue'
 import type { RetryItem } from '../review/retry'
+
+const retryLineCalls = vi.hoisted(() => ({ count: 0 }))
+
+vi.mock('../review/retryLine', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../review/retryLine')>()
+  return {
+    ...original,
+    createRetryLine: (...args: Parameters<typeof original.createRetryLine>) => {
+      retryLineCalls.count += 1
+      return original.createRetryLine(...args)
+    },
+  }
+})
+
+import { RetryQueue } from './RetryQueue'
 
 const item: RetryItem = {
   schemaVersion: 1,
@@ -38,6 +52,25 @@ const continuationItem: RetryItem = {
   solutionSan: 'd4',
   solutionLineSan: ['d4', 'e5', 'c4'],
   classification: 'mistake',
+}
+
+function largeQueue(count = 500): RetryItem[] {
+  return Array.from({ length: count }, (_, index) => {
+    const sourcePly = index + 1
+    return {
+      ...continuationItem,
+      retryKey: `0123456789abcdef:${sourcePly}`,
+      sourcePly,
+      // Only the active exercise needs chess.js reconstruction. Keeping the
+      // rest invalid makes an accidental whole-queue replay observable.
+      preFen: index === 0 ? continuationItem.preFen : 'not a FEN',
+      status: 'active',
+    }
+  })
+}
+
+function visibleRetryKeys(markup: string): string[] {
+  return [...markup.matchAll(/data-retry-key="([^"]+)"/g)].map((match) => match[1]!)
 }
 
 describe('personal retry queue', () => {
@@ -136,5 +169,82 @@ describe('personal retry queue', () => {
     expect(markup).toContain('optional replay')
     expect(markup).toContain('Mastered')
     expect(markup).not.toContain('Your review queue is clear')
+  })
+
+  it('uses the stored custom-start fullmove number for a visible picker row without replaying it', () => {
+    const customStart = {
+      ...continuationItem,
+      retryKey: '0123456789abcdef:2',
+      sourcePly: 2,
+      preFen: '4k3/8/8/8/8/8/8/4K3 w - - 0 42',
+      sideToMove: 'w' as const,
+      solutionUci: 'e1e2',
+      solutionSan: 'Ke2',
+      solutionLineSan: ['Ke2'],
+    }
+
+    const markup = renderToStaticMarkup(
+      <RetryQueue
+        items={[continuationItem, customStart]}
+        requestedRetryKey={null}
+        onSave={vi.fn().mockResolvedValue(undefined)}
+        onDelete={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    expect(markup).toContain('Move 42.')
+  })
+
+  it('keeps a 500-item queue to the first 24 picker buttons and rebuilds only the active line', () => {
+    const queue = largeQueue()
+    retryLineCalls.count = 0
+
+    const markup = renderToStaticMarkup(
+      <RetryQueue
+        items={queue}
+        requestedRetryKey={null}
+        onSave={vi.fn().mockResolvedValue(undefined)}
+        onDelete={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    expect(retryLineCalls.count).toBe(1)
+    expect(visibleRetryKeys(markup)).toHaveLength(24)
+    expect(visibleRetryKeys(markup)).toEqual(queue.slice(0, 24).map((entry) => entry.retryKey))
+    expect(markup).toContain('Show 24 more positions')
+    expect(markup).toContain('476 remaining')
+    expect(markup).not.toContain('Saved review line unavailable')
+  })
+
+  it('keeps a requested mastered moment beyond the first page visible and directly playable', () => {
+    const queue = largeQueue()
+    const requested = {
+      ...continuationItem,
+      retryKey: '0123456789abcdef:500',
+      sourcePly: 500,
+      status: 'mastered' as const,
+    }
+    queue[499] = requested
+    retryLineCalls.count = 0
+
+    const markup = renderToStaticMarkup(
+      <RetryQueue
+        items={queue}
+        requestedRetryKey={requested.retryKey}
+        onSave={vi.fn().mockResolvedValue(undefined)}
+        onDelete={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    expect(retryLineCalls.count).toBe(1)
+    expect(visibleRetryKeys(markup)).toHaveLength(24)
+    expect(visibleRetryKeys(markup)).toEqual([
+      ...queue.slice(0, 23).map((entry) => entry.retryKey),
+      requested.retryKey,
+    ])
+    expect(markup).toContain(`data-retry-key="${requested.retryKey}"`)
+    expect(markup).toContain('optional replay')
+    expect(markup).toContain('Mastered')
+    expect(markup).not.toContain('Saved review line unavailable')
   })
 })
