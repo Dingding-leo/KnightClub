@@ -62,6 +62,7 @@ interface BoardSquareProps {
   lastMove: boolean
   evidence: boolean
   premoveState: 'from' | 'to' | null
+  premovePreview: boolean
   canDrag: boolean
   disabled: boolean
   focused: boolean
@@ -94,6 +95,7 @@ const BoardSquare = memo(function BoardSquare({
   lastMove,
   evidence,
   premoveState,
+  premovePreview,
   canDrag,
   disabled,
   focused,
@@ -156,8 +158,9 @@ const BoardSquare = memo(function BoardSquare({
       data-square={square}
       data-evidence={evidence || undefined}
       data-premove={premoveState ?? undefined}
+      data-premove-preview={premovePreview || undefined}
       aria-pressed={selected}
-      aria-label={`${square}${pieceType && pieceColor ? ` ${pieceColor === 'w' ? 'white' : 'black'} ${pieceNames[pieceType]}` : ''}${evidence ? ', coach evidence' : ''}${premoveLabel ? `, queued premove ${premoveLabel}` : ''}`}
+      aria-label={`${square}${pieceType && pieceColor ? ` ${pieceColor === 'w' ? 'white' : 'black'} ${pieceNames[pieceType]}` : ''}${evidence ? ', coach evidence' : ''}${premovePreview ? ', premove preview' : ''}${premoveLabel ? `, queued premove ${premoveLabel}` : ''}`}
     >
       {pieceType && pieceColor ? <ChessPiece color={pieceColor} type={pieceType} /> : null}
       {target ? <span className={pieceType ? 'capture-ring' : 'move-dot'} aria-hidden="true" /> : null}
@@ -195,7 +198,7 @@ function ChessBoardView({
     () => (orientation === 'white' ? 'a8' : 'h1') as Square,
   )
   const boardLabel = premoveMode
-    ? `Chess board. Premove mode: choose one ${interactionColor === 'w' ? 'white' : 'black'} move while the bot thinks.`
+    ? `Chess board. Premove mode: choose one ${interactionColor === 'w' ? 'white' : 'black'} move while the bot thinks. Destination markers are premove previews; final legality is checked after the bot move.`
     : evidenceSquares?.size
       ? `Chess board. Coach evidence highlighted on ${[...evidenceSquares].join(', ')}.`
       : 'Chess board'
@@ -357,6 +360,7 @@ function ChessBoardView({
               lastMove={isLastMove}
               evidence={isEvidence}
               premoveState={premoveState}
+              premovePreview={isTarget && Boolean(premoveMode)}
               canDrag={Boolean(!disabled && piece?.color === (interactionColor ?? game.turn()))}
               disabled={Boolean(disabled)}
               focused={focusSquare === square}

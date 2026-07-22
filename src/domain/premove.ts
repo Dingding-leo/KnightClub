@@ -68,6 +68,30 @@ export function canQueuePremove(game: Chess, humanColor: Color, move: MoveInput)
   return (fileDelta <= 1 && rankDelta <= 1) || (rankDelta === 0 && fileDelta === 2)
 }
 
+/**
+ * Lists the deliberately conditional destinations a human piece can preview
+ * while the bot is thinking. This uses the same permissive shape check as
+ * queueing: a pending bot reply can open a line, make an en-passant capture
+ * possible, or otherwise change final legality. Promotion destinations use a
+ * queen only for this preview; the UI still asks the player to choose a piece
+ * before it queues the move.
+ */
+export function queueablePremoveTargets(game: Chess, humanColor: Color, from: Square): Square[] {
+  const targets: Square[] = []
+
+  for (const rank of '12345678') {
+    for (const file of files) {
+      const to = `${file}${rank}` as Square
+      const move: MoveInput = premoveNeedsPromotion(game, humanColor, from, to)
+        ? { from, to, promotion: 'q' }
+        : { from, to }
+      if (canQueuePremove(game, humanColor, move)) targets.push(to)
+    }
+  }
+
+  return targets
+}
+
 export function queuePremove(game: Chess, humanColor: Color, move: MoveInput): QueuedPremove | null {
   if (!canQueuePremove(game, humanColor, move)) return null
   return { ...move, baseFen: game.fen() }

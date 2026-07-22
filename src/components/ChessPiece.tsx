@@ -130,9 +130,21 @@ const shapes: Record<PieceSymbol, () => ReactElement> = {
   k: King,
 }
 
+// The silhouettes share a 100-unit canvas, but their visual mass does not.
+// In particular, the pawn's compact head and the queen's separated crown used
+// to read smaller than the other pieces despite identical CSS dimensions. Keep
+// the SVG viewport (and therefore square-marker geometry) stable and correct
+// that only inside the artwork. The values leave a visible safety gutter for
+// outlines, so the square's overflow boundary cannot trim a piece.
+const opticalArtTransforms: Partial<Record<PieceSymbol, string>> = {
+  p: 'translate(50 50) scale(1.12 1.05) translate(-50 -50)',
+  q: 'translate(50 50) scale(1.07 1) translate(-50 -50)',
+}
+
 export const ChessPiece = memo(function ChessPiece({ color, type, className }: ChessPieceProps) {
   const Shape = shapes[type]
   const palette = palettes[color]
+  const artTransform = opticalArtTransforms[type]
   const style = {
     '--piece-fill': palette.fill,
     '--piece-shade': palette.shade,
@@ -157,6 +169,7 @@ export const ChessPiece = memo(function ChessPiece({ color, type, className }: C
         strokeLinecap="round"
         strokeLinejoin="round"
         strokeWidth="3.2"
+        transform={artTransform}
       >
         <Shape />
       </g>

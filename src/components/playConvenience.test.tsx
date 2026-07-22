@@ -55,7 +55,7 @@ describe('board convenience contracts', () => {
         game={game}
         orientation="white"
         selected={null}
-        legalTargets={new Set()}
+        legalTargets={new Set(['f3'])}
         lastMove={null}
         interactionColor="w"
         premove={{ from: 'g1', to: 'f3' }}
@@ -68,8 +68,10 @@ describe('board convenience contracts', () => {
     expect(markup).toMatch(/data-square="e4"[^>]*data-draggable="true"|data-draggable="true"[^>]*data-square="e4"/)
     expect(markup).toContain('data-premove="from"')
     expect(markup).toContain('data-premove="to"')
+    expect(markup).toContain('data-premove-preview="true"')
     expect(markup).toContain('queued premove source')
-    expect(markup).toContain('Premove mode: choose one white move while the bot thinks.')
+    expect(markup).toContain('f3, premove preview')
+    expect(markup).toContain('Destination markers are premove previews; final legality is checked after the bot move.')
   })
 })
 

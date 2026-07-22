@@ -32,6 +32,8 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 
 **Latest desktop lazy-library evidence (2026-07-23):** lint and typecheck passed; `npm test` passed with 49 files / 236 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 36 tests; production web and macOS Tauri builds passed; and the local Vite endpoint returned HTTP 200. Desktop startup now validates only the session/preferences bootstrap and a bounded game count; game PGNs remain in SQLite until Library or Insights is opened. A native contract corrupts an otherwise stored game payload and proves bootstrap still succeeds while the on-demand list rejects it, while a review-only database proves legacy browser data cannot overwrite non-game state. Frontend contracts reject malformed/duplicate lazy lists, preserve FIFO around save → list → clear, and merge delayed native data under newer in-memory saved/reviewed records. A manual packaged-desktop large-library walkthrough remains release handoff work.
 
+**Latest interaction-smoothness evidence (2026-07-23):** lint and typecheck passed; `npm test` passed with 50 files / 243 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 36 tests; production web and macOS Tauri builds passed; and the local Vite endpoint returned HTTP 200. Premove tests prove conditional queueable targets, including promotion shape previews, while the board contract labels those markers as conditional and keeps final legality with `chess.js`. Review persistence tests prove a deferred save reports success or a recoverable failure without changing an already completed report, and stale/new-run or unmounted completions stay silent. The fixed 100 × 100 accessible SVG frame remains covered while pawn/queen art receives only internal optical scaling. A manual browser/packaged-desktop interaction walkthrough remains release handoff work.
+
 ## Workspace-navigation user check
 
 1. In **Play**, scroll the page to a measurable non-zero position (for example, 550 px), then select **Review**. Confirm the page starts at the top and the current workspace heading receives focus without being scrolled away.
@@ -53,6 +55,7 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 7. In both runtimes, start a full-game job, stop during the first move and confirm the interactive panel resumes without stale results.
 8. Run `1. f3 e5 2. g4 Qh4#`; confirm the final position says no legal continuation, `g4` is a Blunder/turning point, `Qh4#` is engine-confirmed and clicking the turning point selects its position and explanation.
 9. With a longer PGN, start a full-game review and keep the current board position selected. While before/after progress advances, confirm the board and notation remain responsive and visually unchanged until you navigate, a Coach-evidence highlight changes, or the completed report arrives.
+10. Complete a review while local persistence is delayed. Confirm the scorecards and **Review full game** action return before the short “Saving review privately…” status clears. If storage fails, confirm the completed report remains visible with a save-specific recoverable error rather than an engine failure.
 
 ## Local PGN/FEN transfer check
 
@@ -149,7 +152,7 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 
 ## Premove browser/native check
 
-1. During a local bot search, click or drag one human piece to queue a plausible premove. Confirm only the human pieces remain draggable, source and destination receive distinct purple markers, the queued move is announced with a Cancel premove control, and no stale legal-target dots imply guaranteed legality.
+1. During a local bot search, select one human piece before queuing a plausible premove. Confirm only the human pieces remain draggable, conditional destination markers appear and are labelled as premove previews, source and destination receive distinct purple markers after queueing, and final legality remains checked only after the bot reply.
 2. Let the bot reply. Confirm a legal queued move is applied immediately after the bot move, the queue disappears, and Stockfish begins a fresh search only if the premove hands the turn back to the bot. Queue a move made illegal by the reply and confirm only the bot move remains with a clear cancellation notice.
 3. In a timed increment game, queue a premove and confirm the human move consumes no elapsed time but earns the configured increment. Undo it and confirm the board and exact pre-premove clock return without replaying a stale engine result.
 4. Test both a White-side reply and a Black-side opening premove. Press Escape or use Cancel premove, then pause, restart, open a decision, load a saved game and reload the app; a queued move must never survive any of those boundaries.
@@ -167,7 +170,7 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 2. At 920 px and below, confirm the board retains its `calc(100dvh - 260px)` cap. At 700 px and below, confirm the board stage remains `width: 100%` and does not introduce horizontal overflow.
 3. In the packaged macOS application, repeat the wide desktop and responsive-boundary checks before treating this presentation change as manually desktop-verified.
 
-**Recorded evidence (2026-07-22):** a browser/layout audit at 1470 × 801 observed the target increase from about 541 px to about 621 px. The full frontend suite passed with 35 files / 155 tests; typecheck, lint, the web build and the macOS Tauri bundle also passed.
+**Implementation evidence (2026-07-23):** source inspection confirms both desktop rules use `calc(100dvh - 180px)`, the ≤920 px rule retains `calc(100dvh - 260px)`, and the ≤700 px rule retains `width: 100%`. Lint, typecheck, the 50-file / 243-test frontend suite, 36-test Rust suite, web build, local HTTP check and macOS Tauri bundle passed. This is automated/build evidence, not a manual browser-layout observation.
 
 **Desktop handoff:** a manual wide-desktop packaged-app walkthrough was not performed. Do not infer it from the successful bundle build.
 

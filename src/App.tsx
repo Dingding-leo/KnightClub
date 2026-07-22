@@ -90,6 +90,7 @@ import {
 import {
   canQueuePremove,
   premoveNeedsPromotion,
+  queueablePremoveTargets,
   queuePremove,
   tryApplyPremove,
   type QueuedPremove,
@@ -512,11 +513,17 @@ export default function App() {
     && !gameFinished
     && !decision
     && Boolean(clock.activeColor)
-  const targets = useMemo(() => new Set<Square>(
-    selected && isHumanTurn(mode, game.turn(), humanColor)
-      ? legalMovesFrom(game, selected).map((move) => move.to)
-      : [],
-  ), [game, humanColor, mode, selected])
+  const targets = useMemo(() => {
+    if (!selected) return new Set<Square>()
+    if (isHumanTurn(mode, game.turn(), humanColor)) {
+      return new Set<Square>(legalMovesFrom(game, selected).map((move) => move.to))
+    }
+    // These are shape-only premove previews, not a promise that the move will
+    // remain legal after the bot's pending reply. `tryApplyPremove` still asks
+    // chess.js to validate the actual resulting position.
+    if (premoveWindow) return new Set<Square>(queueablePremoveTargets(game, humanColor, selected))
+    return new Set<Square>()
+  }, [game, humanColor, mode, premoveWindow, selected])
   const boardDisabled = gameFinished
     || !clock.activeColor
     || Boolean(decision)

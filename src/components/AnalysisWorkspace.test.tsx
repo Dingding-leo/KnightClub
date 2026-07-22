@@ -1,11 +1,26 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   AnalysisWorkspace,
   CoachEvidenceCard,
+  ReviewSaveNotice,
 } from './AnalysisWorkspace'
 import type { CoachGuidance } from '../review/coach'
+import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
+import type { PersistedReview } from '../review/reviewPersistence'
 import { evidenceSquaresForGuidance, reviewNavigationForKey, reviewPlyAfter } from '../review/reviewWorkspaceUtils'
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+const persistedReview = { reviewKey: '0123456789abcdef' } as PersistedReview
 
 describe('analysis workspace convenience contracts', () => {
   it('makes browser Stockfish analysis and replay available without the desktop runtime', () => {
@@ -67,6 +82,100 @@ describe('analysis workspace convenience contracts', () => {
     expect(markup).toContain('Analysis is waiting for the bot')
     expect(markup).toContain('The live bot move has priority')
     expect(markup).toContain('disabled=""')
+  })
+})
+
+describe('full-review background persistence', () => {
+  it('shows a brief saving status without replacing the completed review', () => {
+    expect(renderToStaticMarkup(<ReviewSaveNotice saving />)).toContain('Saving review privately on this device')
+    expect(renderToStaticMarkup(<ReviewSaveNotice saving={false} />)).toBe('')
+  })
+
+  it('waits for storage in the background before reporting success', async () => {
+    const pending = deferred<void>()
+    const save = vi.fn(() => pending.promise)
+    const onSaved = vi.fn()
+    const onFailed = vi.fn()
+
+    const task = saveCompletedReviewInBackground({
+      save,
+      record: persistedReview,
+      isCurrent: () => true,
+      onSaved,
+      onFailed,
+    })
+
+    expect(save).toHaveBeenCalledWith(persistedReview)
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(onFailed).not.toHaveBeenCalled()
+
+    pending.resolve(undefined)
+    await task
+
+    expect(onSaved).toHaveBeenCalledOnce()
+    expect(onSaved).toHaveBeenCalledWith(persistedReview)
+    expect(onFailed).not.toHaveBeenCalled()
+  })
+
+  it('reports a current save failure without a false saved notification', async () => {
+    const failure = new Error('storage is full')
+    const onSaved = vi.fn()
+    const onFailed = vi.fn()
+
+    await saveCompletedReviewInBackground({
+      save: async () => { throw failure },
+      record: persistedReview,
+      isCurrent: () => true,
+      onSaved,
+      onFailed,
+    })
+
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(onFailed).toHaveBeenCalledOnce()
+    expect(onFailed).toHaveBeenCalledWith(failure)
+  })
+
+  it('keeps late save completions silent after a newer run or unmount', async () => {
+    const staleSave = deferred<void>()
+    const unmountedSave = deferred<void>()
+    let runCurrent = true
+    let mounted = true
+    const onSaved = vi.fn()
+    const onFailed = vi.fn()
+
+    const staleTask = saveCompletedReviewInBackground({
+      save: () => staleSave.promise,
+      record: persistedReview,
+      isCurrent: () => runCurrent,
+      onSaved,
+      onFailed,
+    })
+    runCurrent = false
+    staleSave.resolve(undefined)
+
+    const unmountedTask = saveCompletedReviewInBackground({
+      save: () => unmountedSave.promise,
+      record: persistedReview,
+      isCurrent: () => mounted,
+      onSaved,
+      onFailed,
+    })
+    mounted = false
+    unmountedSave.reject(new Error('late write'))
+
+    await Promise.all([staleTask, unmountedTask])
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(onFailed).not.toHaveBeenCalled()
+  })
+
+  it('keeps a callback exception from becoming an unhandled background task', async () => {
+    await expect(saveCompletedReviewInBackground({
+      save: async () => undefined,
+      record: persistedReview,
+      isCurrent: () => true,
+      onSaved: () => { throw new Error('library callback failed') },
+      onFailed: () => { throw new Error('failure callback failed') },
+    })).resolves.toBeUndefined()
   })
 })
 

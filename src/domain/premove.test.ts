@@ -1,6 +1,12 @@
 import { Chess } from 'chess.js'
 import { describe, expect, it } from 'vitest'
-import { canQueuePremove, premoveNeedsPromotion, queuePremove, tryApplyPremove } from './premove'
+import {
+  canQueuePremove,
+  premoveNeedsPromotion,
+  queueablePremoveTargets,
+  queuePremove,
+  tryApplyPremove,
+} from './premove'
 
 describe('premove queue preview', () => {
   it('accepts plausible human-piece geometry while rejecting opponent pieces and own targets', () => {
@@ -12,6 +18,18 @@ describe('premove queue preview', () => {
     expect(canQueuePremove(game, 'w', { from: 'g8', to: 'f6' })).toBe(false)
     expect(canQueuePremove(game, 'w', { from: 'b1', to: 'd2' })).toBe(false)
     expect(canQueuePremove(game, 'w', { from: 'e4', to: 'e7' })).toBe(false)
+  })
+
+  it('lists only queueable shape previews, including promotion destinations', () => {
+    const game = new Chess()
+    game.move('e4')
+
+    expect(queueablePremoveTargets(game, 'w', 'g1')).toEqual(['e2', 'f3', 'h3'])
+    expect(queueablePremoveTargets(game, 'w', 'e4')).toEqual(['d5', 'e5', 'f5'])
+    expect(queueablePremoveTargets(game, 'w', 'g8')).toEqual([])
+
+    const promotionGame = new Chess('4k3/P7/8/8/8/8/8/4K3 b - - 0 1')
+    expect(queueablePremoveTargets(promotionGame, 'w', 'a7')).toEqual(['a8', 'b8'])
   })
 
   it('allows a queued en-passant shape that only becomes legal after the bot move', () => {

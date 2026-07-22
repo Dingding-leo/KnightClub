@@ -40,6 +40,7 @@ import { inertAnalysisBoardInteraction } from '../analysis/analysisBoardInteract
 import { STANDARD_START_FEN } from '../domain/chess'
 import { copyText, downloadText } from '../domain/textTransfer'
 import { runGameReview, type GameReview, type ReviewProgress } from '../review/gameReviewRunner'
+import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { MoveClassification, ReviewedMove } from '../review/reviewModel'
 import { buildCoachGuidanceFromTimeline, type CoachGuidance } from '../review/coach'
 import { evidenceSquaresForGuidance, reviewNavigationForKey, reviewPlyAfter } from '../review/reviewWorkspaceUtils'
@@ -93,6 +94,11 @@ interface AnalysisMoveListProps {
   ply: number
   review: GameReview | null
   onSelectPly: (ply: number) => void
+}
+
+export function ReviewSaveNotice({ saving }: { saving: boolean }) {
+  if (!saving) return null
+  return <p className="review-retained" role="status">Saving review privately on this device…</p>
 }
 
 const effortOptions = {
@@ -234,6 +240,7 @@ export function AnalysisWorkspace({
   const [review, setReview] = useState<GameReview | null>(null)
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress | null>(null)
   const [reviewRunning, setReviewRunning] = useState(false)
+  const [reviewSaving, setReviewSaving] = useState(false)
   const [reviewError, setReviewError] = useState('')
   const [reviewHydrating, setReviewHydrating] = useState(false)
   const [reviewOrigin, setReviewOrigin] = useState<'saved' | 'restored' | null>(null)
@@ -243,6 +250,8 @@ export function AnalysisWorkspace({
   const reviewClient = useRef<StockfishAnalysisClient | null>(null)
   const reviewAbort = useRef<AbortController | null>(null)
   const reviewLoadVersion = useRef(0)
+  const reviewRunVersion = useRef(0)
+  const mounted = useRef(true)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const fileImportGate = useRef(createLatestRequestGate())
 
@@ -304,6 +313,10 @@ export function AnalysisWorkspace({
     [timeline.moves],
   )
 
+  const isReviewRunCurrent = (version: number) => {
+    return mounted.current && version === reviewRunVersion.current
+  }
+
   useEffect(() => {
     if (!enabled || reviewRunning || positionTerminal || engineBusy) {
       client.current?.cancel()
@@ -351,12 +364,18 @@ export function AnalysisWorkspace({
     }
   }, [effort, enabled, engineBusy, engineHashMb, enginePath, engineThreads, multiPv, position.fen, positionTerminal, reviewRunning])
 
-  useEffect(() => () => {
-    fileImportGate.current.invalidate()
-    reviewAbort.current?.abort()
-    disposeAndClearClient(client)
-    disposeAndClearClient(reviewClient)
-    reviewAbort.current = null
+  useEffect(() => {
+    const importGate = fileImportGate.current
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      reviewRunVersion.current += 1
+      importGate.invalidate()
+      reviewAbort.current?.abort()
+      disposeAndClearClient(client)
+      disposeAndClearClient(reviewClient)
+      reviewAbort.current = null
+    }
   }, [])
 
   useEffect(() => {
@@ -416,12 +435,24 @@ export function AnalysisWorkspace({
     if (!requestedReviewTarget) return
     let cancelled = false
     const target = requestedReviewTarget
+    const targetVersion = ++reviewRunVersion.current
+    reviewAbort.current?.abort()
+    reviewClient.current?.cancel()
+    reviewAbort.current = null
+    fileImportGate.current.invalidate()
+    // This queued navigation is a new user intent. Invalidate both a running
+    // review and any earlier saved-review lookup before awaiting its source.
+    reviewLoadVersion.current += 1
+    setReviewRunning(false)
+    setReviewSaving(false)
+    setReviewProgress(null)
     setReviewError('')
 
     void (async () => {
       try {
         if (!reviewStore) throw new Error('The source review is not available in this session.')
         const record = await reviewStore.load(target.reviewKey)
+        if (cancelled || !isReviewRunCurrent(targetVersion)) return
         if (!record) throw new Error('The saved source review is no longer available on this device.')
         const restored = createPgnTimeline(record.sourcePgn)
         if (createReviewKey(restored) !== target.reviewKey
@@ -429,21 +460,20 @@ export function AnalysisWorkspace({
           || target.sourcePly > restored.moves.length) {
           throw new Error('The saved source review does not match this practice position.')
         }
-        if (cancelled) return
+        if (cancelled || !isReviewRunCurrent(targetVersion)) return
 
         // Restore through the same immutable PGN path as a normal review, then
         // let the ordinary hydration effect restore the saved report.
-        reviewAbort.current?.abort()
-        reviewClient.current?.cancel()
-        reviewLoadVersion.current += 1
         setTimeline(restored)
         setPgnInput(record.sourcePgn)
         setPly(target.sourcePly)
         setReview(null)
         setReviewOrigin(null)
         setReviewProgress(null)
+        setReviewRunning(false)
+        setReviewSaving(false)
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && isReviewRunCurrent(targetVersion)) {
           setReviewError(error instanceof Error ? error.message : 'The source review could not be opened.')
         }
       } finally {
@@ -455,13 +485,23 @@ export function AnalysisWorkspace({
   }, [onRequestedReviewTargetHandled, requestedReviewTarget, reviewStore])
 
   const stopFullReview = () => {
+    reviewRunVersion.current += 1
     reviewAbort.current?.abort()
     reviewClient.current?.cancel()
+    reviewAbort.current = null
+    setReviewRunning(false)
+    setReviewSaving(false)
+    setReviewProgress(null)
   }
 
   const startFullReview = async () => {
     if (!timeline.moves.length || reviewRunning || engineBusy) return
+    fileImportGate.current.invalidate()
     client.current?.cancel()
+    const runVersion = ++reviewRunVersion.current
+    // A saved-review lookup that started before the player asked for a fresh
+    // review must not replace its eventual result.
+    reviewLoadVersion.current += 1
     const controller = new AbortController()
     reviewAbort.current = controller
     reviewClient.current ??= new StockfishAnalysisClient(undefined, Date.now() + 1_000_000)
@@ -475,6 +515,8 @@ export function AnalysisWorkspace({
       hashMb: engineHashMb,
     }
     setReviewRunning(true)
+    setReviewSaving(false)
+    setReviewHydrating(false)
     setReview(null)
     setReviewOrigin(null)
     setReviewError('')
@@ -487,29 +529,47 @@ export function AnalysisWorkspace({
         setReviewProgress,
         controller.signal,
       )
-      if (controller.signal.aborted) return
-      const record = createPersistedReview(timeline, result)
+      if (controller.signal.aborted || !isReviewRunCurrent(runVersion)) return
+      // Results belong to the player as soon as Stockfish completes. Saving is
+      // intentionally detached below so a busy native write never holds this
+      // screen or its controls hostage.
+      setReview(result)
+      setReviewOrigin(null)
+      setReviewProgress(null)
+      setReviewRunning(false)
+      if (!reviewStore) return
       try {
-        if (reviewStore) await reviewStore.save(record)
-        if (controller.signal.aborted || reviewAbort.current !== controller) return
-        setReview(result)
-        setReviewOrigin(reviewStore ? 'saved' : null)
-        if (reviewStore) onReviewSaved?.(record)
+        const record = createPersistedReview(timeline, result)
+        setReviewSaving(true)
+        void saveCompletedReviewInBackground({
+          save: (savedRecord) => reviewStore.save(savedRecord),
+          record,
+          isCurrent: () => isReviewRunCurrent(runVersion),
+          onSaved: (savedRecord) => {
+            setReviewSaving(false)
+            setReviewOrigin('saved')
+            onReviewSaved?.(savedRecord)
+          },
+          onFailed: (error) => {
+            setReviewSaving(false)
+            setReviewError(error instanceof Error
+              ? `Review is ready, but it could not be saved locally: ${error.message}`
+              : 'Review is ready, but it could not be saved locally.')
+          },
+        })
       } catch (error) {
-        if (controller.signal.aborted || reviewAbort.current !== controller) return
-        setReview(result)
-        setReviewOrigin(null)
+        if (!isReviewRunCurrent(runVersion)) return
         setReviewError(error instanceof Error
-          ? `Review completed, but could not be saved: ${error.message}`
-          : 'Review completed, but could not be saved locally.')
+          ? `Review is ready, but it could not be saved locally: ${error.message}`
+          : 'Review is ready, but it could not be saved locally.')
       }
     } catch (error) {
-      if (!(error instanceof Error && error.name === 'AbortError')) {
+      if (isReviewRunCurrent(runVersion) && !(error instanceof Error && error.name === 'AbortError')) {
         setReviewError(error instanceof Error ? error.message : 'Full-game review failed.')
       }
     } finally {
-      if (reviewAbort.current === controller) {
-        reviewAbort.current = null
+      if (isReviewRunCurrent(runVersion)) {
+        if (reviewAbort.current === controller) reviewAbort.current = null
         setReviewRunning(false)
       }
     }
@@ -780,6 +840,7 @@ export function AnalysisWorkspace({
             <p>{desktop ? 'Native Stockfish runs locally without sending the game anywhere.' : 'Stockfish WebAssembly runs locally in this browser; the game never leaves this device.'}</p>
             {engineBusy && <p className="review-retained" role="status">The live bot move has priority. Review starts as soon as it finishes.</p>}
             {reviewHydrating && <p className="review-retained" role="status">Checking this game for a saved review…</p>}
+            <ReviewSaveNotice saving={reviewSaving} />
             {reviewRunning && reviewProgress && (
               <div className="review-progress" role="status" aria-live="polite">
                 <div><span>Analysing move {Math.min(reviewProgress.completedPly + 1, reviewProgress.totalPly)} of {reviewProgress.totalPly}</span><strong>{Math.round(100 * reviewProgress.completedPly / reviewProgress.totalPly)}%</strong></div>

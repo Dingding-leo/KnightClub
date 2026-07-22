@@ -211,10 +211,12 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .board-stage {
-  /* Reserve the real header/player-bar height so the whole board—not only its
-     top ranks—stays visible in a standard desktop viewport. */
-  width: min(100%, 720px, max(360px, calc(100dvh - 230px)));
-  min-width: min(470px, max(360px, calc(100dvh - 230px)));
+  /* Keep enough room for surrounding controls while retaining the documented
+     180 px wide-screen allowance. This keeps the board near its readable
+     621 px target at a 1470 × 801 desktop instead of shrinking pieces
+     unnecessarily. */
+  width: min(100%, 720px, max(360px, calc(100dvh - 180px)));
+  min-width: min(470px, max(360px, calc(100dvh - 180px)));
   justify-self: end;
 }
 
@@ -1686,7 +1688,7 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
   .app-nav nav button:hover { transform: none; }
   .privacy-badge { margin: 0; }
   .app-main { padding-top: 18px; }
-  .board-stage { width: min(100%, 720px, max(360px, calc(100dvh - 230px))); min-width: 0; }
+  .board-stage { width: min(100%, 720px, max(360px, calc(100dvh - 180px))); min-width: 0; }
   .game-panel { height: min(760px, calc(100dvh - 126px)); }
 }
 
