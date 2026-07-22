@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type FormEvent,
   type MouseEvent,
 } from 'react'
 import { Chess, type PieceSymbol, type Square } from 'chess.js'
@@ -104,6 +105,7 @@ import { saveRetryItemsSerially } from '../review/retryQueuePersistence'
 import {
   createPersistedReview,
   createReviewKey,
+  MAX_REVIEW_PLIES,
   type PersistedReview,
 } from '../review/reviewPersistence'
 import { ChessBoard } from './ChessBoard'
@@ -111,8 +113,9 @@ import { ChessPiece } from './ChessPiece'
 
 interface AnalysisWorkspaceProps {
   desktop: boolean
-  /** A live bot move has priority over optional review analysis. */
+  /** Another local engine task has priority over optional review analysis. */
   engineBusy?: boolean
+  engineBusyMessage?: string
   currentPgn: string
   enginePath: string | null
   threads: number
@@ -359,9 +362,13 @@ const AnalysisMovePickerOptions = memo(function AnalysisMovePickerOptions({
 
 export const AnalysisMovePicker = memo(function AnalysisMovePicker({ moves, ply, onSelectPly }: AnalysisMovePickerProps) {
   const onSelectPlyRef = useRef(onSelectPly)
+  const [jumpPly, setJumpPly] = useState(() => String(ply))
   useLayoutEffect(() => {
     onSelectPlyRef.current = onSelectPly
   }, [onSelectPly])
+  useEffect(() => {
+    setJumpPly(String(ply))
+  }, [ply])
 
   const selectPly = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
     const nextPly = Number(event.target.value)
@@ -369,13 +376,44 @@ export const AnalysisMovePicker = memo(function AnalysisMovePicker({ moves, ply,
     onSelectPlyRef.current(nextPly)
   }, [moves.length])
 
+  const submitPlyJump = useCallback((event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const nextPly = Number(jumpPly)
+    if (!Number.isInteger(nextPly) || nextPly < 0 || nextPly > moves.length) return
+    onSelectPlyRef.current(nextPly)
+  }, [jumpPly, moves.length])
+
+  // Native selects create one DOM option per move even while their mobile-only
+  // control is hidden on desktop. Keep the fast labelled select for normal
+  // games, but use a bounded numeric jump field for long imported timelines.
+  if (moves.length > MAX_REVIEW_PLIES) {
+    return (
+      <div className="analysis-mobile-move-picker">
+        <span>Jump to ply</span>
+        <form className="analysis-mobile-move-picker__jump" aria-label="Jump to a game position by ply" onSubmit={submitPlyJump}>
+          <input
+            aria-label={`Jump to a game position by ply number, from 0 to ${moves.length}`}
+            type="number"
+            min={0}
+            max={moves.length}
+            step={1}
+            inputMode="numeric"
+            value={jumpPly}
+            onChange={(event) => setJumpPly(event.target.value)}
+          />
+          <button type="submit">Go</button>
+        </form>
+      </div>
+    )
+  }
+
   return (
-    <label className="analysis-mobile-move-picker">
+    <div className="analysis-mobile-move-picker">
       <span>Jump to move</span>
       <select aria-label="Jump to a game position" value={ply} onChange={selectPly}>
         <AnalysisMovePickerOptions moves={moves} />
       </select>
-    </label>
+    </div>
   )
 })
 
@@ -509,6 +547,7 @@ export function CoachEvidenceCard({ guidance }: { guidance: CoachGuidance | null
 export function AnalysisWorkspace({
   desktop,
   engineBusy = false,
+  engineBusyMessage,
   currentPgn,
   enginePath,
   threads,
@@ -553,7 +592,12 @@ export function AnalysisWorkspace({
   const [reviewSaving, setReviewSaving] = useState(false)
   const [reviewError, setReviewError] = useState('')
   const [reviewHydrating, setReviewHydrating] = useState(() => {
-    return Boolean(reviewStore && timeline.source === 'pgn' && timeline.moves.length)
+    return Boolean(
+      reviewStore
+      && timeline.source === 'pgn'
+      && timeline.moves.length
+      && timeline.moves.length <= MAX_REVIEW_PLIES,
+    )
   })
   const [reviewOrigin, setReviewOrigin] = useState<'saved' | 'restored' | null>(null)
   const [retrySavingAction, setRetrySavingAction] = useState<RetrySaveAction | null>(null)
@@ -602,9 +646,10 @@ export function AnalysisWorkspace({
     : selectedNavigationMoveLabel
       ? `After ${selectedNavigationMoveLabel}, position ${ply} of ${maxPly}`
       : `Start position, position 0 of ${maxPly}`
+  const fullReviewOverPlyLimit = timeline.moves.length > MAX_REVIEW_PLIES
   const reviewKey = useMemo(
-    () => timeline.source === 'pgn' && timeline.moves.length ? createReviewKey(timeline) : null,
-    [timeline],
+    () => timeline.source === 'pgn' && timeline.moves.length && !fullReviewOverPlyLimit ? createReviewKey(timeline) : null,
+    [fullReviewOverPlyLimit, timeline],
   )
   // A completed report can surface several training calls-to-action while the
   // player browses it. Validate the immutable game replay once, then retain a
@@ -617,6 +662,7 @@ export function AnalysisWorkspace({
     engineBusy,
     reviewHydrating,
     hasReview: review !== null,
+    moveCount: timeline.moves.length,
   })
   const selectedReview = variationActive ? null : selectedReviewMoveAtPly(review, ply)
   // Cursor navigation updates the board and notation at interaction priority.
@@ -1017,6 +1063,10 @@ export function AnalysisWorkspace({
 
   const startFullReview = async () => {
     if (!timeline.moves.length || reviewRunning || engineBusy || reviewHydrating) return
+    if (timeline.moves.length > MAX_REVIEW_PLIES) {
+      setReviewError(`Full-game review is limited to ${MAX_REVIEW_PLIES.toLocaleString()} plies. You can still browse this game and analyse any position.`)
+      return
+    }
     clearVariationInteraction()
     fileImportGate.current.invalidate()
     // Browser ambient and full-review clients each own a Worker. Full review
@@ -1464,7 +1514,7 @@ export function AnalysisWorkspace({
         {timeline.moves.length > 0 && (
           <section className="full-review" aria-label="Full game review">
             <div className="full-review__heading">
-              <div><span className="eyebrow">Game review</span><strong>{timeline.moves.length} plies · up to {timeline.moves.length + 1} position searches</strong></div>
+              <div><span className="eyebrow">Game review</span><strong>{fullReviewOverPlyLimit ? `Full-game review limit · ${MAX_REVIEW_PLIES.toLocaleString()} plies` : `${timeline.moves.length} plies · up to ${timeline.moves.length + 1} position searches`}</strong></div>
               {reviewRunning ? (
                 <button className="danger-button" type="button" onClick={stopFullReview}><CircleStop size={15} />Stop</button>
               ) : (
@@ -1472,7 +1522,8 @@ export function AnalysisWorkspace({
               )}
             </div>
             <p>{desktop ? 'Native Stockfish runs locally without sending the game anywhere.' : 'Stockfish WebAssembly runs locally in this browser; the game never leaves this device.'}</p>
-            {engineBusy && <p className="review-retained" role="status">The live bot move has priority. Review starts as soon as it finishes.</p>}
+            {fullReviewOverPlyLimit && <p className="review-retained" role="status">Full-game review is limited to {MAX_REVIEW_PLIES.toLocaleString()} plies to keep this device responsive. You can still browse this game and analyse any position.</p>}
+            {engineBusy && <p className="review-retained" role="status">{engineBusyMessage ?? 'The live bot move has priority. Review starts as soon as it finishes.'}</p>}
             {reviewHydrating && <p className="review-retained" role="status">Checking this game for a saved review…</p>}
             <ReviewSaveNotice saving={reviewSaving} />
             <RetrySaveNotice action={retrySavingAction} />

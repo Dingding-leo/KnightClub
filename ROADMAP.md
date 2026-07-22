@@ -18,8 +18,10 @@
 - [x] Tauri desktop shell for macOS first
 - [x] Unlimited, Bullet, Blitz, Rapid, Classical and custom time controls
 - [x] Timestamp-based clocks with Fischer increment, Bronstein-style delay, pause, timeout and clock-aware undo
+- [x] Cross-workspace live timed-game dock with real clocks and a one-tap return to Play
 - [x] Resignation, hot-seat/bot draw offers, completion persistence and original optional move sounds
 - [x] User-selectable Stockfish executable with automatic/explicit UCI verification
+- [x] One managed desktop Stockfish supervisor for Play and Verify, with visible single-engine-task priority
 - [x] Pinned Stockfish 18 Lite WebAssembly for offline website play, analysis and full-game review
 - [ ] Optional verified Stockfish downloader
 - [x] Robust UCI bridge with cancellation, monotonic native Play stop watermark, timeouts, restart, stale-result rejection and pre-setup queued-request cancellation
@@ -39,6 +41,7 @@
 ## Phase 2 — Full post-game review
 
 - [x] Cancellable in-session per-move Stockfish analysis with reproducible settings
+- [x] 1,024-ply full-review resource cap with long-PGN numeric position jump
 - [x] Local persistence for completed full-game reports, saved-report restoration and Library review linkage
 - [ ] Resumable or reusable review jobs with immutable engine fingerprints and position caching
 - [x] Nonlinear accuracy and expected-score model with documented formulae

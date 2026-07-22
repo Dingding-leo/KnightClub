@@ -1,6 +1,7 @@
 import { Chess } from 'chess.js'
 import type { AnalysisTimeline } from '../analysis/analysisModel'
 import type { AnalysisResponse, AnalysisSettings } from '../analysis/stockfishAnalysisClient'
+import { MAX_REVIEW_PLIES } from './reviewPersistence'
 import { classifyReviewedMove, summarizeGameReview, type GameReviewSummary, type ReviewedMove } from './reviewModel'
 
 export type AnalyzePosition = (fen: string, settings: AnalysisSettings) => Promise<AnalysisResponse>
@@ -37,6 +38,12 @@ export async function runGameReview(
   signal?: AbortSignal,
 ): Promise<GameReview> {
   if (!timeline.moves.length) throw new Error('Load a PGN with at least one move before starting a full review.')
+  // A completed report is intentionally bounded by the persistence contract.
+  // Guard here as well as in the UI so a future caller cannot start thousands
+  // of sequential local Stockfish searches only to fail on save.
+  if (timeline.moves.length > MAX_REVIEW_PLIES) {
+    throw new Error(`Full-game reviews support up to ${MAX_REVIEW_PLIES.toLocaleString()} plies.`)
+  }
   const beforeSettings = { ...settings, multiPv: Math.max(2, settings.multiPv) }
   const afterSettings = { ...settings, multiPv: 1 }
   const reviewed: ReviewedMove[] = []

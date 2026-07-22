@@ -1,6 +1,7 @@
 import type { Square } from 'chess.js'
 import type { CoachGuidance } from './coach'
 import type { ReviewedMove } from './reviewModel'
+import { MAX_REVIEW_PLIES } from './reviewPersistence'
 
 export function evidenceSquaresForGuidance(guidance: CoachGuidance | null): Set<Square> {
   return new Set(guidance?.evidence.flatMap((item) => item.squares) ?? [])
@@ -34,9 +35,11 @@ export function fullReviewActionFor(input: {
   engineBusy: boolean
   reviewHydrating: boolean
   hasReview: boolean
+  /** Long games remain navigable, but a full local engine pass is bounded. */
+  moveCount?: number
 }): FullReviewAction {
   return {
-    disabled: input.engineBusy || input.reviewHydrating,
+    disabled: input.engineBusy || input.reviewHydrating || (input.moveCount ?? 0) > MAX_REVIEW_PLIES,
     label: input.hasReview ? 'Review again' : 'Review full game',
   }
 }

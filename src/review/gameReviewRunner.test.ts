@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createPgnTimeline } from '../analysis/analysisModel'
+import { createPgnTimeline, type AnalysisTimeline } from '../analysis/analysisModel'
 import type { AnalysisResponse, AnalysisSettings } from '../analysis/stockfishAnalysisClient'
+import { MAX_REVIEW_PLIES } from './reviewPersistence'
 import { runGameReview } from './gameReviewRunner'
 
 const settings: AnalysisSettings = { moveTimeMs: 100, depth: 12, nodes: null, multiPv: 2, threads: 1, hashMb: 16 }
@@ -22,6 +23,17 @@ function response(fen: string, move: string, score = 0): AnalysisResponse {
 }
 
 describe('full-game review runner', () => {
+  it('rejects an over-limit game before starting any Stockfish work', async () => {
+    const timeline = {
+      moves: Array.from({ length: MAX_REVIEW_PLIES + 1 }, (_, index) => ({ ply: index + 1 })),
+      positions: [],
+    } as unknown as AnalysisTimeline
+    const analyze = vi.fn()
+
+    await expect(runGameReview(timeline, analyze, settings)).rejects.toThrow(`Full-game reviews support up to ${MAX_REVIEW_PLIES.toLocaleString()} plies.`)
+    expect(analyze).not.toHaveBeenCalled()
+  })
+
   it('reuses each after-position as the next ply before analysis and reports monotonic progress', async () => {
     const timeline = createPgnTimeline('1. e4 e5')
     const moves = ['e2e4', 'e7e5', 'g1f3']

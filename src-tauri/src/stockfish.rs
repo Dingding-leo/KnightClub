@@ -1186,15 +1186,6 @@ pub fn probe_stockfish(
     })
 }
 
-#[tauri::command]
-pub async fn stockfish_probe(engine_path: Option<PathBuf>) -> Result<ProbeResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        probe_stockfish(engine_path, Duration::from_secs(3)).map_err(|error| error.to_string())
-    })
-    .await
-    .map_err(|error| format!("Stockfish probe task failed: {error}"))?
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BestMoveResponse {
@@ -1262,6 +1253,65 @@ impl Default for StockfishState {
             cancelled_through: Arc::new(AtomicU64::new(0)),
         }
     }
+}
+
+/**
+ * Native verification is deliberately a handshake on Play's managed UCI
+ * supervisor, not an independent short-lived child process. The shared mutex
+ * means a Verify click that races a bot move waits for the existing bounded
+ * request rather than competing for CPU, and a successful idle verification
+ * leaves that warm supervisor ready for the next move.
+ *
+ * Keep `probe_stockfish` above as the pure, short-lived helper used by the
+ * standalone discovery/smoke contracts. This stateful path exists only for
+ * the Tauri command, where Play owns the persistent runtime.
+ */
+fn probe_managed_stockfish(
+    state: &StockfishState,
+    explicit: Option<PathBuf>,
+    timeout: Duration,
+) -> Result<ProbeResponse, EngineError> {
+    let path = discover_for_app(explicit)?;
+    let mut guard = state
+        .engine
+        .lock()
+        .map_err(|_| EngineError::Io("Stockfish state lock was poisoned".into()))?;
+    if guard.as_ref().map(|engine| engine.path.as_path()) != Some(path.as_path()) {
+        *guard = Some(ManagedEngine {
+            path: path.clone(),
+            supervisor: EngineSupervisor::new(path.clone()),
+        });
+    }
+    let identity = match guard
+        .as_mut()
+        .expect("managed engine initialized")
+        .supervisor
+        .initialize(timeout)
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            *guard = None;
+            return Err(error);
+        }
+    };
+    Ok(ProbeResponse {
+        engine_name: identity.name,
+        engine_path: path.display().to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn stockfish_probe(
+    state: State<'_, StockfishState>,
+    engine_path: Option<PathBuf>,
+) -> Result<ProbeResponse, String> {
+    let owned_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        probe_managed_stockfish(&owned_state, engine_path, Duration::from_secs(3))
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("Stockfish probe task failed: {error}"))?
 }
 
 #[derive(Clone)]
@@ -1633,5 +1683,105 @@ mod tests {
 
         discard_engine_after_error(&mut engine, &EngineError::Timeout("late reply".into()));
         assert!(engine.is_none(), "a failed engine must still be recycled");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_probe_waits_for_and_reuses_the_play_supervisor() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary engine directory");
+        let engine_path = directory.path().join("stockfish-shared-probe-test");
+        let command_log = directory.path().join("commands.log");
+        let process_log = directory.path().join("pids.log");
+        let script = format!(
+            r#"#!/bin/sh
+COMMAND_LOG="{}"
+PROCESS_LOG="{}"
+echo "$$" >> "$PROCESS_LOG"
+while IFS= read -r line; do
+  echo "$line" >> "$COMMAND_LOG"
+  case "$line" in
+    uci) echo "id name Shared Play Fixture"; echo "uciok" ;;
+    isready) echo "readyok" ;;
+    go*) sleep 1; echo "info depth 8 nodes 1200 nps 24000"; echo "bestmove e2e4" ;;
+    quit) exit 0 ;;
+  esac
+done
+"#,
+            command_log.display(),
+            process_log.display(),
+        );
+        fs::write(&engine_path, script).expect("write fake engine");
+        let mut permissions = fs::metadata(&engine_path)
+            .expect("engine metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&engine_path, permissions).expect("mark fake engine executable");
+
+        let state = StockfishState::default();
+        let search_state = state.clone();
+        let search_path = engine_path.clone();
+        let search = std::thread::spawn(move || {
+            stockfish_best_move_blocking(
+                &search_state,
+                BestMoveRequest {
+                    request_id: 1,
+                    fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".into(),
+                    level: "easy".into(),
+                    engine_path: Some(search_path),
+                    settings: None,
+                    candidate_count: None,
+                },
+            )
+        });
+
+        let mut search_started = false;
+        for _ in 0..100 {
+            search_started = fs::read_to_string(&command_log)
+                .map(|commands| commands.lines().any(|line| line.starts_with("go ")))
+                .unwrap_or(false);
+            if search_started {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            search_started,
+            "the Play request should hold the shared mutex"
+        );
+
+        let probe =
+            probe_managed_stockfish(&state, Some(engine_path.clone()), Duration::from_secs(3))
+                .expect("the probe waits for the Play request then reuses its supervisor");
+        let move_result = search
+            .join()
+            .expect("Play search thread joins")
+            .expect("Play search succeeds");
+
+        assert_eq!(probe.engine_name, "Shared Play Fixture");
+        assert_eq!(move_result.engine_name, "Shared Play Fixture");
+        assert!(state.engine.lock().expect("managed engine").is_some());
+
+        let commands = fs::read_to_string(command_log).expect("read command log");
+        assert_eq!(
+            commands.lines().filter(|line| *line == "uci").count(),
+            1,
+            "a Verify race must reuse the active Play UCI child",
+        );
+        assert_eq!(
+            commands
+                .lines()
+                .filter(|line| line.starts_with("go "))
+                .count(),
+            1,
+        );
+        let pids = fs::read_to_string(process_log).expect("read process log");
+        assert_eq!(
+            pids.lines().filter(|pid| !pid.is_empty()).count(),
+            1,
+            "the probe must not spawn another Stockfish process",
+        );
     }
 }

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Started timed games now remain visible outside Play through a live clock dock with both times, active/paused turn context and a one-tap return action
+- Full-game Review now enforces its shared 1,024-ply persisted-report bound while long imports retain per-position analysis and use a numeric ply jump instead of a giant mobile option list
 - Review now offers an explicitly temporary, local **Explore this position** branch: legal click/drag moves, keyboard-safe focused promotion choice, Undo/Reset/Return controls, an explicit non-save notice when main-line navigation leaves the branch, branch-specific Stockfish analysis and standalone FEN/PGN transfer without modifying the original game; long sequential branches reuse verified local replay history and create PGN only when transferred
 - Personal **From your games** queues now render a 24-position picker window with an explicit **Show N more positions** action, preserve a current/requested deep item in that window and use 44 px phone targets
 - Review now initializes its timeline and selected position from one shared PGN parse, then reuses that timeline for an unchanged live game
@@ -90,6 +92,7 @@
 
 ### Changed
 
+- Desktop **Verify engine** now shares Play's managed Stockfish supervisor, and the interface reserves a bot move or verification as the single local engine task instead of allowing competing work
 - Normal native Stockfish cancellation now retains the warm process, acknowledged UCI vector and Hash; the next `isready` fence drains late output safely, while failed and timed-out processes are still recreated
 - Review cursor changes now paint board/notation first, defer coach evidence and create strict retry payloads only when the player chooses Practice; ambient candidate analysis waits for a 350 ms idle pause before starting uncached engine work
 - Personal retry queues now reconstruct `chess.js` lines only for the active exercise; unopened selector labels derive from persisted FEN fullmove facts instead of replaying every saved PV

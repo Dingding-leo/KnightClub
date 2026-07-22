@@ -36,6 +36,7 @@ import { useClockSnapshot } from './components/clockRuntimeContext'
 import { EngineSettingsPanel, type EngineStatus } from './components/EngineSettingsPanel'
 import { GameDecisionDialog, type GameDecision } from './components/GameDecisionDialog'
 import { ChessPiece } from './components/ChessPiece'
+import { LiveGameDock } from './components/LiveGameDock'
 import { MoveList } from './components/MoveList'
 import { PlayPreviewNavigation } from './components/PlayPreviewNavigation'
 import type { TacticsSprintResult } from './components/TacticsSprint'
@@ -108,6 +109,7 @@ import {
 } from './domain/playPreview'
 import { handoffWorkspace } from './domain/workspaceNavigation'
 import { terminalSessionFingerprint } from './domain/libraryIdentity'
+import { shouldShowLiveGameDock } from './domain/liveGameDock'
 import {
   LIBRARY_PAGE_SIZE,
   progressiveLibraryResults,
@@ -513,6 +515,7 @@ export default function App() {
   const [engineStatus, setEngineStatus] = useState<EngineStatus>(desktop
     ? { kind: 'idle', message: 'Loads on your first bot move or when you verify it.' }
     : { kind: 'idle', message: 'Loads locally on your first bot move or when you verify it.' })
+  const [engineProbeActive, setEngineProbeActive] = useState(false)
   // These are draft-only values. A ref keeps typing local to the mounted
   // inputs instead of re-rendering the full Play shell for every keypress.
   const customTimeDraft = useRef(customTimeDraftFor(initial.timeControl))
@@ -589,6 +592,7 @@ export default function App() {
 
   const botRequestVersion = useRef(0)
   const engineProbeVersion = useRef(0)
+  const engineProbeActiveRef = useRef(false)
   const pendingRestart = useRef<(() => void) | null>(null)
   const savedPosition = useRef<string | null>(terminalSessionFingerprint(
     initial.game.fen(),
@@ -970,9 +974,16 @@ export default function App() {
   }, [playSound])
 
   const verifyEngine = useCallback(async (enginePath: string | null) => {
+    if (premoveWindow) {
+      setNotice('Stockfish is making the live bot move. Verify it after the move finishes.')
+      return
+    }
+    if (engineProbeActiveRef.current) return
     const client = botClient.current
     if (!client) return
     const version = ++engineProbeVersion.current
+    engineProbeActiveRef.current = true
+    setEngineProbeActive(true)
     setEngineStatus({ kind: 'checking' })
     try {
       const result = await client.probe(enginePath)
@@ -986,8 +997,11 @@ export default function App() {
         kind: 'error',
         message: error instanceof Error ? error.message : 'Stockfish could not be verified.',
       })
+    } finally {
+      engineProbeActiveRef.current = false
+      setEngineProbeActive(false)
     }
-  }, [desktop])
+  }, [desktop, premoveWindow])
 
   const chooseEngineExecutable = async () => {
     if (!desktop) return
@@ -1875,6 +1889,11 @@ export default function App() {
   const setupSummary = mode === 'bot'
     ? `${opponentName} · You: ${humanSideLabel} · ${timeControl.label}`
     : `Hot-seat · ${timeControl.label}`
+  const liveGameDockVisible = shouldShowLiveGameDock({
+    outsidePlay: tab !== 'play',
+    gameFinished,
+    clock,
+  })
 
   return (
     <ClockRuntime state={clock} gameFinished={gameFinished} onTick={captureClockNow} onFlag={handleClockFlag}>
@@ -1914,6 +1933,8 @@ export default function App() {
           </div>
           <span className="session-pill"><i />{mode === 'bot' ? `${opponentName} · ${opponentStrength} · You: ${humanSideLabel}` : 'Hot-seat game'} · {timeControl.label}</span>
         </header>
+
+        <LiveGameDock visible={liveGameDockVisible} onReturnToGame={() => navigateTo('play')} />
 
         {tab === 'play' && (
           <section className="play-workspace">
@@ -2075,6 +2096,10 @@ export default function App() {
                           settings={engineSettings}
                           desktop={desktop}
                           status={engineStatus}
+                          engineBusy={premoveWindow || engineProbeActive}
+                          engineBusyMessage={premoveWindow
+                            ? 'The live bot move has priority. Settings and verification will be available after it finishes.'
+                            : 'Verifying Stockfish locally. Settings will be available when the check finishes.'}
                           onChange={(settings) => setEngineSettings(normalizeEngineSettings(settings))}
                           onChooseExecutable={() => { void chooseEngineExecutable() }}
                           onUseAutomatic={useAutomaticEngine}
@@ -2188,8 +2213,13 @@ export default function App() {
                 desktop={desktop}
                 // This is derived from the position rather than the visual
                 // `thinking` flag so Review cannot win the short race between a
-                // human move and the bot effect starting its search.
-                engineBusy={premoveWindow}
+                // human move and the bot effect starting its search. A manual
+                // engine verification also keeps its one local runtime private
+                // until the probe settles.
+                engineBusy={premoveWindow || engineProbeActive}
+                engineBusyMessage={premoveWindow
+                  ? 'The live bot move has priority. Review starts as soon as it finishes.'
+                  : 'Stockfish verification has priority. Review starts as soon as the local check finishes.'}
                 currentPgn={sharePgn}
                 enginePath={engineSettings.enginePath}
                 threads={engineSettings.threads}

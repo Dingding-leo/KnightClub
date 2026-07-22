@@ -208,4 +208,27 @@ describe('engine settings convenience contracts', () => {
     expect(markup).toContain('role="status"')
     expect(markup).toContain('Stockfish 18')
   })
+
+  it('holds setup controls while another local engine task has priority', () => {
+    const markup = renderToStaticMarkup(
+      <EngineSettingsPanel
+        settings={{ ...DEFAULT_ENGINE_SETTINGS, profile: 'custom', enginePath: '/opt/homebrew/bin/stockfish' }}
+        desktop
+        status={{ kind: 'idle', message: 'Not checked yet.' }}
+        engineBusy
+        engineBusyMessage="The live bot move has priority."
+        onChange={vi.fn()}
+        onChooseExecutable={vi.fn()}
+        onUseAutomatic={vi.fn()}
+        onVerify={vi.fn()}
+      />,
+    )
+
+    expect(markup).toContain('class="engine-settings__busy"')
+    expect(markup).toContain('The live bot move has priority.')
+    expect(markup).toMatch(/<select[^>]*aria-label="Engine profile"[^>]*disabled=""/)
+    expect(markup).toContain('Choose executable')
+    expect(markup).toContain('Verify engine')
+    expect(markup.match(/<button[^>]*disabled=""/g)?.length).toBeGreaterThanOrEqual(3)
+  })
 })

@@ -20,6 +20,9 @@ interface EngineSettingsPanelProps {
   settings: EngineSettings
   desktop: boolean
   status: EngineStatus
+  /** Another local engine task has priority over configuration controls. */
+  engineBusy?: boolean
+  engineBusyMessage?: string
   onChange: (settings: EngineSettings) => void
   onChooseExecutable: () => void
   onUseAutomatic: () => void
@@ -38,12 +41,16 @@ export function EngineSettingsPanel({
   settings,
   desktop,
   status,
+  engineBusy = false,
+  engineBusyMessage,
   onChange,
   onChooseExecutable,
   onUseAutomatic,
   onVerify,
 }: EngineSettingsPanelProps) {
+  const controlsDisabled = engineBusy || status.kind === 'checking'
   const update = <Key extends keyof EngineSettings>(key: Key, value: EngineSettings[Key]) => {
+    if (controlsDisabled) return
     onChange({ ...settings, [key]: value })
   }
   return (
@@ -61,6 +68,7 @@ export function EngineSettingsPanel({
           <select
             aria-label="Engine profile"
             value={settings.profile}
+            disabled={controlsDisabled}
             onChange={(event) => update('profile', event.target.value as EngineSettings['profile'])}
           >
             <option value="preset">Strength preset</option>
@@ -73,20 +81,20 @@ export function EngineSettingsPanel({
           <p className="engine-settings__hint">Easy, Balanced and Strong use single-threaded, node-bounded combinations of Elo, skill, time and memory.</p>
         ) : (
           <div className="engine-settings__grid">
-            <label><span>Target Elo</span><input key={`elo-${settings.elo}`} aria-label="Target Elo" type="number" min="1320" max="3190" step="10" defaultValue={settings.elo} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event: FocusEvent<HTMLInputElement>) => update('elo', numeric(event.target.value))} /></label>
-            {settings.profile === 'custom' && <label><span>Skill level</span><input key={`skill-${settings.skillLevel}`} aria-label="Skill level" type="number" min="0" max="20" defaultValue={settings.skillLevel} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event) => update('skillLevel', numeric(event.target.value))} /></label>}
-            <label><span>Move time (ms)</span><input key={`time-${settings.moveTimeMs}`} aria-label="Move time in milliseconds" type="number" min="50" max="30000" step="50" defaultValue={settings.moveTimeMs} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event) => update('moveTimeMs', numeric(event.target.value))} /></label>
-            <label><span>Threads</span><input key={`threads-${settings.threads}-${desktop}`} aria-label="Threads" type="number" min="1" max="32" defaultValue={desktop ? settings.threads : 1} disabled={!desktop} title={desktop ? undefined : 'The browser engine uses one isolated worker thread.'} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event) => update('threads', numeric(event.target.value))} /></label>
-            <label><span>Hash memory (MB)</span><input key={`hash-${settings.hashMb}`} aria-label="Hash memory" type="number" min="16" max={desktop ? 4096 : 128} step="16" defaultValue={Math.min(settings.hashMb, desktop ? 4096 : 128)} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event) => update('hashMb', numeric(event.target.value))} /></label>
-            <label><span>MultiPV lines</span><input key={`multipv-${settings.multiPv}`} aria-label="MultiPV lines" type="number" min="1" max="5" defaultValue={settings.multiPv} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event) => update('multiPv', numeric(event.target.value))} /></label>
-            <label><span>Search depth</span><input key={`depth-${settings.depth ?? 'none'}`} aria-label="Search depth" type="number" min="1" max="40" placeholder="No limit" defaultValue={settings.depth ?? ''} onKeyDown={commitOnEnter} onBlur={(event) => update('depth', event.target.value ? numeric(event.target.value) : null)} /></label>
-            <label><span>Node limit</span><input key={`nodes-${settings.nodes ?? 'none'}`} aria-label="Node limit" type="number" min="1000" max="100000000" step="1000" placeholder="No limit" defaultValue={settings.nodes ?? ''} onKeyDown={commitOnEnter} onBlur={(event) => update('nodes', event.target.value ? numeric(event.target.value) : null)} /></label>
+            <label><span>Target Elo</span><input key={`elo-${settings.elo}`} aria-label="Target Elo" type="number" min="1320" max="3190" step="10" defaultValue={settings.elo} disabled={controlsDisabled} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event: FocusEvent<HTMLInputElement>) => update('elo', numeric(event.target.value))} /></label>
+            {settings.profile === 'custom' && <label><span>Skill level</span><input key={`skill-${settings.skillLevel}`} aria-label="Skill level" type="number" min="0" max="20" defaultValue={settings.skillLevel} disabled={controlsDisabled} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event) => update('skillLevel', numeric(event.target.value))} /></label>}
+            <label><span>Move time (ms)</span><input key={`time-${settings.moveTimeMs}`} aria-label="Move time in milliseconds" type="number" min="50" max="30000" step="50" defaultValue={settings.moveTimeMs} disabled={controlsDisabled} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event) => update('moveTimeMs', numeric(event.target.value))} /></label>
+            <label><span>Threads</span><input key={`threads-${settings.threads}-${desktop}`} aria-label="Threads" type="number" min="1" max="32" defaultValue={desktop ? settings.threads : 1} disabled={controlsDisabled || !desktop} title={desktop ? undefined : 'The browser engine uses one isolated worker thread.'} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event) => update('threads', numeric(event.target.value))} /></label>
+            <label><span>Hash memory (MB)</span><input key={`hash-${settings.hashMb}`} aria-label="Hash memory" type="number" min="16" max={desktop ? 4096 : 128} step="16" defaultValue={Math.min(settings.hashMb, desktop ? 4096 : 128)} disabled={controlsDisabled} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event) => update('hashMb', numeric(event.target.value))} /></label>
+            <label><span>MultiPV lines</span><input key={`multipv-${settings.multiPv}`} aria-label="MultiPV lines" type="number" min="1" max="5" defaultValue={settings.multiPv} disabled={controlsDisabled} onFocus={(event) => event.currentTarget.select()} onKeyDown={commitOnEnter} onBlur={(event) => update('multiPv', numeric(event.target.value))} /></label>
+            <label><span>Search depth</span><input key={`depth-${settings.depth ?? 'none'}`} aria-label="Search depth" type="number" min="1" max="40" placeholder="No limit" defaultValue={settings.depth ?? ''} disabled={controlsDisabled} onKeyDown={commitOnEnter} onBlur={(event) => update('depth', event.target.value ? numeric(event.target.value) : null)} /></label>
+            <label><span>Node limit</span><input key={`nodes-${settings.nodes ?? 'none'}`} aria-label="Node limit" type="number" min="1000" max="100000000" step="1000" placeholder="No limit" defaultValue={settings.nodes ?? ''} disabled={controlsDisabled} onKeyDown={commitOnEnter} onBlur={(event) => update('nodes', event.target.value ? numeric(event.target.value) : null)} /></label>
           </div>
         )}
 
         {settings.profile === 'custom' && (
           <label className="engine-checkbox">
-            <input type="checkbox" checked={settings.limitStrength} onChange={(event) => update('limitStrength', event.target.checked)} />
+            <input type="checkbox" checked={settings.limitStrength} disabled={controlsDisabled} onChange={(event) => update('limitStrength', event.target.checked)} />
             <span>Limit strength with UCI Elo</span>
           </label>
         )}
@@ -95,9 +103,9 @@ export function EngineSettingsPanel({
           <span>{desktop ? 'Stockfish executable' : 'Browser engine'}</span>
           <code title={desktop ? settings.enginePath ?? 'Automatic discovery' : 'Stockfish 18 Lite WebAssembly'}>{desktop ? settings.enginePath ?? 'Automatic discovery' : 'Stockfish 18 Lite · WebAssembly'}</code>
           <div className={desktop ? undefined : 'engine-path__actions--browser'}>
-            {desktop && <button type="button" onClick={onChooseExecutable} disabled={status.kind === 'checking'}><FolderOpen size={14} />Choose executable</button>}
-            {desktop && <button type="button" onClick={onUseAutomatic} disabled={status.kind === 'checking' || !settings.enginePath}><RefreshCw size={14} />Automatic</button>}
-            <button type="button" onClick={onVerify} disabled={status.kind === 'checking'}><Gauge size={14} />Verify engine</button>
+            {desktop && <button type="button" onClick={onChooseExecutable} disabled={controlsDisabled}><FolderOpen size={14} />Choose executable</button>}
+            {desktop && <button type="button" onClick={onUseAutomatic} disabled={controlsDisabled || !settings.enginePath}><RefreshCw size={14} />Automatic</button>}
+            <button type="button" onClick={onVerify} disabled={controlsDisabled}><Gauge size={14} />Verify engine</button>
           </div>
         </div>
 
@@ -108,6 +116,7 @@ export function EngineSettingsPanel({
             <small>{status.kind === 'ready' ? (desktop ? status.enginePath : 'Runs locally in an isolated Web Worker.') : status.message ?? (desktop ? 'Verify the engine before your next game.' : 'Loads on demand and remains available offline after caching.')}</small>
           </span>
         </div>
+        {engineBusy && <p className="engine-settings__busy" role="status">{engineBusyMessage ?? 'Another local engine task has priority. Settings will be available when it finishes.'}</p>}
         {!desktop && (
           <p className="engine-settings__hint">
             Engine distribution: <a href={`${import.meta.env.BASE_URL}stockfish/COPYING.txt`} target="_blank" rel="noreferrer">GPLv3 licence</a>

@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
+import { Chess } from 'chess.js'
 import {
   AnalysisMoveList,
   AnalysisMovePicker,
@@ -11,6 +12,7 @@ import {
   ReviewSaveNotice,
 } from './AnalysisWorkspace'
 import { createPgnTimeline } from '../analysis/analysisModel'
+import { MAX_REVIEW_PLIES } from '../review/reviewPersistence'
 import { resolvePlayPreviewReviewPly } from '../review/playPreviewReviewTarget'
 import { liveGameContinuation } from '../review/liveGameContinuation'
 import { createInitialWorkspaceState, liveTimelineFor } from '../review/reviewWorkspaceState'
@@ -40,6 +42,13 @@ function deferred<T>() {
 }
 
 const persistedReview = { reviewKey: '0123456789abcdef' } as PersistedReview
+
+function repeatedKnightPgn(plies: number): string {
+  const game = new Chess()
+  const cycle = ['Nf3', 'Nf6', 'Ng1', 'Ng8']
+  for (let index = 0; index < plies; index += 1) game.move(cycle[index % cycle.length]!)
+  return game.pgn()
+}
 
 function retryItem(retryKey: string): RetryItem {
   return {
@@ -151,6 +160,44 @@ describe('analysis workspace convenience contracts', () => {
     expect(picker).toContain('aria-label="Jump to a game position"')
     expect(picker).toContain('<option value="0">Start position</option>')
     expect(picker).toContain('<option value="3" selected="">2. Nf3</option>')
+  })
+
+  it('uses a bounded numeric ply jump instead of mounting every option for a long game', () => {
+    const [white, black] = createPgnTimeline('1. e4 e5').moves
+    if (!white || !black) throw new Error('Expected source moves.')
+    const longMoves = Array.from({ length: MAX_REVIEW_PLIES + 1 }, (_, index) => ({
+      ...(index % 2 === 0 ? white : black),
+      ply: index + 1,
+      moveNumber: Math.floor(index / 2) + 1,
+    }))
+
+    const markup = renderToStaticMarkup(
+      <AnalysisMovePicker moves={longMoves} ply={1} onSelectPly={vi.fn()} />,
+    )
+
+    expect(markup).toContain('Jump to ply')
+    expect(markup).toContain('type="number"')
+    expect(markup).toContain('aria-label="Jump to a game position by ply"')
+    expect(markup).toContain('>Go</button>')
+    expect(markup).not.toContain('<option')
+  })
+
+  it('keeps a long game browsable while making its full review visibly unavailable', () => {
+    const markup = renderToStaticMarkup(
+      <AnalysisWorkspace
+        desktop={false}
+        currentPgn={repeatedKnightPgn(MAX_REVIEW_PLIES + 1)}
+        enginePath={null}
+        threads={1}
+        hashMb={16}
+      />,
+    )
+    const fullReviewMarkup = markup.slice(markup.indexOf('class="full-review"'))
+
+    expect(markup).toContain('Jump to ply')
+    expect(markup).not.toContain(`<option value="${MAX_REVIEW_PLIES + 1}"`)
+    expect(fullReviewMarkup).toContain(`Full-game review is limited to ${MAX_REVIEW_PLIES.toLocaleString()} plies to keep this device responsive.`)
+    expect(fullReviewMarkup).toMatch(/<button class="primary-button" type="button" disabled="">[\s\S]*?Review full game/)
   })
 
   it('bounds long Review notation while pinning an early selected position', () => {
@@ -339,6 +386,23 @@ describe('analysis workspace convenience contracts', () => {
     expect(markup).toContain('Analysis is waiting for the bot')
     expect(markup).toContain('The live bot move has priority')
     expect(markup).toContain('disabled=""')
+  })
+
+  it('can reserve Review for a local Stockfish verification without mislabelling it as a bot move', () => {
+    const markup = renderToStaticMarkup(
+      <AnalysisWorkspace
+        desktop={false}
+        engineBusy
+        engineBusyMessage="Stockfish verification has priority. Review starts as soon as the local check finishes."
+        currentPgn="1. e4 e5"
+        enginePath={null}
+        threads={1}
+        hashMb={16}
+      />,
+    )
+
+    expect(markup).toContain('Stockfish verification has priority.')
+    expect(markup).not.toContain('The live bot move has priority. Review starts as soon as it finishes.')
   })
 
   it('keeps the costly full-review action unavailable while a matching saved report is loading', () => {
