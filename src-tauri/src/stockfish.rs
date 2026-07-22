@@ -781,6 +781,9 @@ impl EngineSupervisor {
         cancelled_through: &AtomicU64,
     ) -> Result<SearchOutcome, EngineError> {
         validate_fen(fen)?;
+        if cancelled_through.load(Ordering::Acquire) == request_id {
+            return Err(EngineError::Cancelled);
+        }
         let result =
             self.best_move_after_validation(fen, settings, timeout, request_id, cancelled_through);
         // A timeout, cancellation or protocol failure can leave output in
@@ -1197,6 +1200,9 @@ fn stockfish_best_move_blocking(
         .engine
         .lock()
         .map_err(|_| "Stockfish state lock was poisoned".to_owned())?;
+    if request.request_id == state.cancelled_through.load(Ordering::Acquire) {
+        return Err(EngineError::Cancelled.to_string());
+    }
     if guard.as_ref().map(|engine| engine.path.as_path()) != Some(path.as_path()) {
         *guard = Some(ManagedEngine {
             path: path.clone(),

@@ -50,7 +50,7 @@ All three enable `UCI_LimitStrength` and stop on whichever time or node limit ar
 
 ## Cancellation and recovery
 
-Only one frontend search of each kind is active. Starting a new search cancels the old one. The frontend rejects a response unless its request ID and FEN both match. Rust checks cancellation while reading output, sends `stop`, and removes a failed or timed-out process so the next request gets a clean engine. The browser adapter sends `stop`, drains the old `bestmove` before beginning another search and terminates/recreates an unresponsive Worker. Bot play may fall back to the isolated KnightBot Web Worker; Review never presents KnightBot output as Stockfish analysis.
+Only one frontend search of each kind is active. Starting a new search cancels the old one. The frontend rejects a response unless its request ID and FEN both match. Rust checks cancellation before native Play setup, again after its single-engine mutex is acquired, and while reading output; a queued cancelled request therefore sends no new options, `position` or `go`, while an active search receives `stop`. Rust removes a failed or timed-out process so the next request gets a clean engine. The browser adapter sends `stop`, drains the old `bestmove` before beginning another search and terminates/recreates an unresponsive Worker. Bot play may fall back to the isolated KnightBot Web Worker; Review never presents KnightBot output as Stockfish analysis.
 
 ## Local verification
 

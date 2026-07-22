@@ -22,6 +22,8 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 
 **Latest Play-flow evidence (2026-07-23):** lint and typecheck passed; `npm test` passed with 49 files / 231 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 32 tests; production web and macOS Tauri builds passed; and the local Vite endpoint returned HTTP 200. SSR contracts prove fresh setup starts open with its compact summary, while restored in-progress play hides inactive configuration and retains completion actions. The first-ply/mobile disclosure walkthrough remains release handoff work.
 
+**Latest native Play cancellation evidence (2026-07-23):** lint and typecheck passed; `npm test` passed with 49 files / 231 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 33 tests; production web and macOS Tauri builds passed; and the local Vite endpoint returned HTTP 200. The deterministic fake-UCI contract starts a valid supervisor, pre-cancels the next Play request, then proves its command log contains only the initial `uci`/`isready` handshake—no option, `position` or `go` command. The native path also rechecks cancellation after waiting for the single-engine mutex, before it can create or initialize a supervisor. A manual rapid-reset desktop Play walkthrough remains release handoff work.
+
 ## Workspace-navigation user check
 
 1. In **Play**, scroll the page to a measurable non-zero position (for example, 550 px), then select **Review**. Confirm the page starts at the top and the current workspace heading receives focus without being scrolled away.

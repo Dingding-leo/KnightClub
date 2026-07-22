@@ -87,6 +87,7 @@
 - Full-game review progress now leaves an unchanged 64-square read-only board and long notation list untouched until the selected position, evidence or completed report changes.
 - Contiguous queued desktop active-session snapshots now coalesce to the newest payload; ordinary writes and clear-session actions remain FIFO barriers.
 - Fresh Play sessions now open configuration first, then collapse it after the first ply to an original opponent/side/time summary; Draw, Resign and notation remain immediately available while inactive setup controls unmount.
+- Cancelled native Play requests now stop before UCI setup and are checked again after the shared engine lock, avoiding wasted option, position and search work when players rapidly change course.
 - Review opens with Quick one-line analysis and waits for any pending bot turn instead of intentionally competing for local CPU.
 - Production browser builds register the service worker; development and Tauri do not, while desktop startup removes stale PWA caches left by earlier Tauri builds
 - Fresh timed games are armed until the first legal move instead of charging while the player is choosing an opening

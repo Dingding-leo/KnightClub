@@ -228,6 +228,41 @@ done
 }
 
 #[test]
+fn skips_a_pre_cancelled_play_request_before_engine_setup() {
+    let (directory, command_log) = fake_engine_with_command_log(
+        r#"
+while IFS= read -r line; do
+  echo "$line" >> "$COMMAND_LOG"
+  case "$line" in
+    uci) echo "id name Cancelled Play Fixture"; echo "uciok" ;;
+    isready) echo "readyok" ;;
+    quit) exit 0 ;;
+  esac
+done
+"#,
+    );
+    let mut engine = EngineSupervisor::new(engine_path(directory.path()));
+    engine
+        .initialize(Duration::from_secs(3))
+        .expect("UCI initialization");
+
+    let cancelled = AtomicU64::new(17);
+    let error = engine
+        .best_move(
+            START_FEN,
+            &strength_preset("balanced").expect("preset"),
+            Duration::from_millis(100),
+            17,
+            &cancelled,
+        )
+        .expect_err("pre-cancelled request must not start setup");
+    assert!(matches!(error, EngineError::Cancelled));
+
+    let commands = fs::read_to_string(command_log).expect("read command log");
+    assert_eq!(commands.lines().collect::<Vec<_>>(), vec!["uci", "isready"]);
+}
+
+#[test]
 fn returns_two_play_candidates_from_one_bounded_uci_search() {
     let (directory, command_log) = fake_engine_with_command_log(
         r#"
