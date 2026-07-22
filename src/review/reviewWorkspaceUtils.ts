@@ -5,6 +5,27 @@ export function evidenceSquaresForGuidance(guidance: CoachGuidance | null): Set<
   return new Set(guidance?.evidence.flatMap((item) => item.squares) ?? [])
 }
 
+export interface FullReviewAction {
+  disabled: boolean
+  label: 'Review full game' | 'Review again'
+}
+
+/**
+ * A saved-review lookup is deliberately allowed to settle before a player
+ * spends another full local engine pass. Once a report is visible, rerunning
+ * remains an explicit option rather than an ambiguous duplicate action.
+ */
+export function fullReviewActionFor(input: {
+  engineBusy: boolean
+  reviewHydrating: boolean
+  hasReview: boolean
+}): FullReviewAction {
+  return {
+    disabled: input.engineBusy || input.reviewHydrating,
+    label: input.hasReview ? 'Review again' : 'Review full game',
+  }
+}
+
 export type ReviewNavigationAction = 'first' | 'previous' | 'next' | 'last'
 
 export function reviewNavigationForKey(input: {

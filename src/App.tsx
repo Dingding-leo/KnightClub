@@ -1358,6 +1358,12 @@ export default function App() {
       cancelDecision()
       return
     }
+    if (event.key === 'Escape' && promotion) {
+      event.preventDefault()
+      setSelected(null)
+      setPromotion(null)
+      return
+    }
     if (tab !== 'play') return
     const element = event.target instanceof HTMLElement ? event.target : null
     const editable = Boolean(
@@ -1370,7 +1376,7 @@ export default function App() {
       ctrlKey: event.ctrlKey,
       altKey: event.altKey,
       editable,
-      modalOpen: Boolean(decision),
+      modalOpen: Boolean(decision || promotion),
     })
     if (!shortcut) return
     event.preventDefault()

@@ -37,11 +37,11 @@ Candidates must be regular executable files. The path is passed directly to `std
 
 | Level | Elo | Skill | Move time | Node cap | Threads | Hash |
 |---|---:|---:|---:|---:|---:|---:|
-| Easy | 1320 | 2 | 60 ms | 6,000 | 1 | 16 MB |
-| Balanced | 1700 | 8 | 120 ms | 18,000 | 1 | 16 MB |
-| Strong | 2200 | 14 | 200 ms | 45,000 | 1 | 32 MB |
+| Easy | 1320 | 2 | 50 ms | 4,000 | 1 | 16 MB |
+| Balanced | 1700 | 8 | 100 ms | 10,000 | 1 | 16 MB |
+| Strong | 2200 | 14 | 160 ms | 24,000 | 1 | 32 MB |
 
-All three enable `UCI_LimitStrength` and stop on whichever time or node limit arrives first. The UI separately uses a short cancellable display floor (260/360/480 ms) so lower compute budgets do not make play look accidentally instantaneous. These are initial product presets, not rating guarantees; future calibration should use a fixed test suite and recorded hardware.
+All three enable `UCI_LimitStrength` and stop on whichever time or node limit arrives first. The UI separately uses a short cancellable display floor (260/360/480 ms) so lower compute budgets do not make play look accidentally instantaneous. The 4k/10k/24k caps reduce the prior per-move node ceilings by 33%/44%/47% while preserving the one-thread, three-level difficulty ordering. These are initial product presets, not rating guarantees; future calibration should use a fixed test suite and recorded hardware.
 
 ## Elo and custom profiles
 

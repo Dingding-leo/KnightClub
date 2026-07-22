@@ -44,7 +44,12 @@ import { runGameReview, type GameReview, type ReviewProgress } from '../review/g
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { MoveClassification, ReviewedMove } from '../review/reviewModel'
 import { buildCoachGuidanceFromTimeline, type CoachGuidance } from '../review/coach'
-import { evidenceSquaresForGuidance, reviewNavigationForKey, reviewPlyAfter } from '../review/reviewWorkspaceUtils'
+import {
+  evidenceSquaresForGuidance,
+  fullReviewActionFor,
+  reviewNavigationForKey,
+  reviewPlyAfter,
+} from '../review/reviewWorkspaceUtils'
 import {
   resolvePlayPreviewReviewPly,
   type PlayPreviewReviewTarget,
@@ -341,7 +346,9 @@ export function AnalysisWorkspace({
   const [reviewRunning, setReviewRunning] = useState(false)
   const [reviewSaving, setReviewSaving] = useState(false)
   const [reviewError, setReviewError] = useState('')
-  const [reviewHydrating, setReviewHydrating] = useState(false)
+  const [reviewHydrating, setReviewHydrating] = useState(() => {
+    return Boolean(reviewStore && timeline.source === 'pgn' && timeline.moves.length)
+  })
   const [reviewOrigin, setReviewOrigin] = useState<'saved' | 'restored' | null>(null)
   const [retrySavingAction, setRetrySavingAction] = useState<RetrySaveAction | null>(null)
   const [retryError, setRetryError] = useState('')
@@ -381,6 +388,11 @@ export function AnalysisWorkspace({
     () => timeline.source === 'pgn' && timeline.moves.length ? createReviewKey(timeline) : null,
     [timeline],
   )
+  const fullReviewAction = fullReviewActionFor({
+    engineBusy,
+    reviewHydrating,
+    hasReview: review !== null,
+  })
   const selectedReview = review?.moves.find((move) => move.ply === ply) ?? null
   const coachGuidance = useMemo(() => {
     return buildCoachGuidanceFromTimeline(timeline, selectedReview)
@@ -648,7 +660,7 @@ export function AnalysisWorkspace({
   }
 
   const startFullReview = async () => {
-    if (!timeline.moves.length || reviewRunning || engineBusy) return
+    if (!timeline.moves.length || reviewRunning || engineBusy || reviewHydrating) return
     fileImportGate.current.invalidate()
     client.current?.cancel()
     const runVersion = ++reviewRunVersion.current
@@ -998,11 +1010,11 @@ export function AnalysisWorkspace({
         {timeline.moves.length > 0 && (
           <section className="full-review" aria-label="Full game review">
             <div className="full-review__heading">
-              <div><span className="eyebrow">Game review</span><strong>{timeline.moves.length} plies · up to two searches per ply</strong></div>
+              <div><span className="eyebrow">Game review</span><strong>{timeline.moves.length} plies · up to {timeline.moves.length + 1} position searches</strong></div>
               {reviewRunning ? (
                 <button className="danger-button" type="button" onClick={stopFullReview}><CircleStop size={15} />Stop</button>
               ) : (
-                <button className="primary-button" type="button" disabled={engineBusy} onClick={() => void startFullReview()}><PlayCircle size={15} />Review full game</button>
+                <button className="primary-button" type="button" disabled={fullReviewAction.disabled} onClick={() => void startFullReview()}><PlayCircle size={15} />{fullReviewAction.label}</button>
               )}
             </div>
             <p>{desktop ? 'Native Stockfish runs locally without sending the game anywhere.' : 'Stockfish WebAssembly runs locally in this browser; the game never leaves this device.'}</p>

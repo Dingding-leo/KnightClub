@@ -18,7 +18,7 @@ describe('gameShortcutFor', () => {
     expect(gameShortcutFor({ key: 'u', altKey: true })).toBeNull()
   })
 
-  it('does not let play shortcuts pass through an open decision dialog', () => {
+  it('does not let play shortcuts pass through an open decision or promotion dialog', () => {
     expect(gameShortcutFor({ key: 'n', modalOpen: true })).toBeNull()
     expect(gameShortcutFor({ key: 'u', modalOpen: true })).toBeNull()
     expect(gameShortcutFor({ key: 'f', modalOpen: true })).toBeNull()

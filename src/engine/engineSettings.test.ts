@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_ENGINE_SETTINGS, normalizeEngineSettings } from './engineSettings'
 
 describe('engine settings', () => {
+  it('starts new configurable engines with a balanced low-compute budget', () => {
+    expect(DEFAULT_ENGINE_SETTINGS).toMatchObject({
+      moveTimeMs: 100,
+      nodes: 10_000,
+      threads: 1,
+      hashMb: 32,
+    })
+  })
+
   it('keeps valid advanced settings', () => {
     expect(normalizeEngineSettings({
       enginePath: '  /opt/homebrew/bin/stockfish  ',
@@ -60,4 +69,3 @@ describe('engine settings', () => {
       .toMatchObject({ depth: null, nodes: null })
   })
 })
-

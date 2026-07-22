@@ -175,6 +175,27 @@ describe('analysis workspace convenience contracts', () => {
     expect(markup).toContain('The live bot move has priority')
     expect(markup).toContain('disabled=""')
   })
+
+  it('keeps the costly full-review action unavailable while a matching saved report is loading', () => {
+    const reviewStore = {
+      load: vi.fn(async () => null),
+      save: vi.fn(async () => undefined),
+    }
+    const markup = renderToStaticMarkup(
+      <AnalysisWorkspace
+        desktop={false}
+        currentPgn="1. e4 e5"
+        enginePath={null}
+        threads={1}
+        hashMb={16}
+        reviewStore={reviewStore}
+      />,
+    )
+    const fullReviewMarkup = markup.slice(markup.indexOf('class="full-review"'))
+
+    expect(fullReviewMarkup).toContain('Checking this game for a saved review…')
+    expect(fullReviewMarkup).toMatch(/<button class="primary-button" type="button" disabled="">[\s\S]*?Review full game/)
+  })
 })
 
 describe('full-review background persistence', () => {

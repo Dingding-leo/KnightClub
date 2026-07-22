@@ -12,6 +12,9 @@
 - Original local Tactics Sprint: a three-position immediate practice path with no initial answer/PV exposure, local legal replay, two-stage hints, explicit reveal, reset and terminal outcome metrics
 - Bounded tactics progress plus immutable-attempt persistence in browser storage and SQLite schema v5, with deterministic reconciliation and atomic native attempt/progress recording
 - Explicit Review waiting state while a live bot move owns the local engine
+- Lower default bot budgets across browser and desktop: Easy/Balanced/Strong now cap at 4k/10k/24k nodes and 50/100/160 ms while preserving one-threaded named-profile behavior and display pacing
+- Full-game Review now waits for a local saved-report lookup before it enables a costly rerun, and labels an intentional rerun clearly
+- Promotion dialogs now block Play shortcuts behind the modal while preserving Escape-to-cancel
 - Cancellable full-game Stockfish review with intermediate-position reuse, live ply progress and a safe Stop action
 - Full-game review now avoids duplicate Stockfish work by reusing each intermediate post-move MultiPV result for the next move's baseline while retaining a single-PV final after check and rules-layer terminal handling
 - Decision dialogs now block Play shortcuts behind the modal while preserving Escape-to-cancel
@@ -86,7 +89,7 @@
 - Review, Train and Insights are now independently loaded local workspaces with hover/focus prefetch, stable loading feedback and a scoped reload recovery instead of adding their code to the initial Play bundle
 - Browser and desktop Stockfish runtimes now reuse only acknowledged unchanged UCI option blocks while retaining `isready` fences, preventing repeated Hash/option churn during continuous play and full-game review
 - Opening Play no longer probes Stockfish or constructs the KnightBot fallback worker. Both engines initialize only for a real bot move or explicit verification.
-- Easy/Balanced/Strong play presets now use 60/120/200 ms, 6k/18k/45k node limits, one thread and 16/16/32 MB hash respectively; the same cancellable UI pacing floor preserves a natural reply cadence without extra search CPU.
+- Easy/Balanced/Strong play presets now use 50/100/160 ms, 4k/10k/24k node limits, one thread and 16/16/32 MB hash respectively; the same cancellable UI pacing floor preserves a natural reply cadence without extra search CPU.
 - The fallback KnightBot is a bounded one-ply recovery path instead of a depth-two full-tree search.
 - A shared clock runtime now confines visible-second and low-time-tenth updates to player-clock consumers, preserves exact timeout timestamps and reports one flag while every workspace remains mounted. Memoized board-square wrappers keep selection, drag, premove and keyboard focus from replacing all 64 buttons.
 - Full-game review progress now leaves an unchanged 64-square read-only board and long notation list untouched until the selected position, evidence or completed report changes.
