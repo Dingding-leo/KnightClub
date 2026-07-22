@@ -38,6 +38,8 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 
 **Latest Play preview-navigation evidence (2026-07-23):** lint and typecheck passed; `npm test` passed with 51 files / 251 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 36 tests. Pure state contracts prove Previous holds at the earliest historical move, Next reaches live only at the newest move, invalid values fail closed and a bot-appended move keeps the selected preview inspectable. Presentation contracts retain the labelled Historical position navigation group, Previous, Next, current move count and Return to live. This is deterministic/markup evidence; a manual Play and narrow packaged-desktop walkthrough remains release handoff work.
 
+**Latest Play-to-Review handoff evidence (2026-07-23):** lint and typecheck passed; `npm test` passed with 51 files / 252 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 36 tests; production web and macOS Tauri builds passed; and the local Vite endpoint returned HTTP 200. The one-shot preview target requires an integer historical ply and exact expected FEN. Contracts prove a matching prefix remains valid after a bot appends a reply, while a changed FEN, zero ply or out-of-range ply falls back to normal Review. The Review component initializes to the verified target before its ordinary analysis effect runs, and the Play preview group exposes **Review this position**. This is deterministic/markup evidence; a manual Play-to-Review walkthrough remains release handoff work.
+
 ## Workspace-navigation user check
 
 1. In **Play**, scroll the page to a measurable non-zero position (for example, 550 px), then select **Review**. Confirm the page starts at the top and the current workspace heading receives focus without being scrolled away.
@@ -189,7 +191,8 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 1. In a game with at least four plies, select an earlier SAN move in **Moves**. Confirm the read-only board exposes **Previous**, **Next**, its move count and **Return to live** directly above the board.
 2. At the earliest previewable move, **Previous** must be disabled. Use **Next** across the remaining moves: the board and last-move highlight must advance one ply at a time, and only the newest move may return to the live board.
 3. While inspecting an earlier ply during a bot turn, let the bot reply. Confirm the displayed historical board does not jump; use **Next** to reach the prior latest move, then the appended reply, and only then live play.
-4. At 320, 375 and 430 px widths, confirm the three preview actions remain fully labelled, have 44 px touch targets, do not introduce horizontal overflow and do not enable board movement, Undo, draw or resign while previewing.
+4. At 320, 375 and 430 px widths, confirm all four preview actions remain fully labelled, have 44 px touch targets, do not introduce horizontal overflow and do not enable board movement, Undo, draw or resign while previewing.
+5. Select **Review this position** from an earlier preview. Confirm Review opens at the same position count and board FEN, including when a bot reply arrives while Review loads. Return to Play and confirm its live clock/game state was never changed. If the source game is replaced before Review opens, confirm Review safely uses its normal final position rather than claiming the old target.
 
 ## Play-flow regression check
 

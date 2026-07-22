@@ -7,6 +7,8 @@ import {
   RetrySaveNotice,
   ReviewSaveNotice,
 } from './AnalysisWorkspace'
+import { createPgnTimeline } from '../analysis/analysisModel'
+import { resolvePlayPreviewReviewPly } from '../review/playPreviewReviewTarget'
 import type { CoachGuidance } from '../review/coach'
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { PersistedReview } from '../review/reviewPersistence'
@@ -52,6 +54,32 @@ function retryItem(retryKey: string): RetryItem {
 }
 
 describe('analysis workspace convenience contracts', () => {
+  it('opens an exact Play preview position only when the Review timeline still matches it', () => {
+    const beforeReply = createPgnTimeline('1. e4 e5 2. Nf3')
+    const timeline = createPgnTimeline('1. e4 e5 2. Nf3 Nc6')
+    const target = { sourcePly: 2, expectedFen: beforeReply.positions[2].fen }
+
+    // A later bot reply extends the timeline but does not invalidate its
+    // already identical historical prefix.
+    expect(timeline.moves).toHaveLength(beforeReply.moves.length + 1)
+    expect(resolvePlayPreviewReviewPly(timeline, target)).toBe(2)
+    expect(resolvePlayPreviewReviewPly(timeline, { ...target, expectedFen: timeline.positions[3].fen })).toBeNull()
+    expect(resolvePlayPreviewReviewPly(timeline, { ...target, sourcePly: 0 })).toBeNull()
+    expect(resolvePlayPreviewReviewPly(timeline, { ...target, sourcePly: 9 })).toBeNull()
+
+    const markup = renderToStaticMarkup(
+      <AnalysisWorkspace
+        desktop={false}
+        currentPgn="1. e4 e5 2. Nf3 Nc6"
+        enginePath={null}
+        threads={1}
+        hashMb={64}
+        requestedPlayPreviewTarget={target}
+      />,
+    )
+    expect(markup).toContain('Position 2 of 4')
+  })
+
   it('makes browser Stockfish analysis and replay available without the desktop runtime', () => {
     const markup = renderToStaticMarkup(
       <AnalysisWorkspace

@@ -124,6 +124,7 @@
 - At phone widths, Review now keeps a labelled 44 px **Jump to move** picker directly below board navigation, so players can return to any PGN position without scrolling past analysis output; the full classified notation list remains available in the panel
 - Play notation now supports a non-destructive, read-only historical board preview with clickable SAN moves and an explicit Return to live action; live clocks, the bot, persistence and queued premoves remain authoritative underneath it
 - Historical Play previews now include an explicit Previous/Next replay bar beside Return to live; it stays at the user-selected ply while a bot reply arrives and reaches live only after the newest move
+- Historical Play previews now offer **Review this position**, carrying a one-shot ply/FEN handoff into Review; a bot-appended matching prefix opens at the intended move, while changed content safely falls back to the normal final position
 - FEN copy/download now exports the exact displayed historical position during notation preview, rather than silently exporting a newer live board
 - Review-to-Train actions now identify which practice route is preparing, announce the local queue work, and disable both routes until the existing serial save path settles
 - Clipboard transfers now use a local fallback/error path when the platform Clipboard API is unavailable or denied
@@ -131,6 +132,7 @@
 
 ### Verification
 
+- Play-to-Review position handoff: lint, typecheck, the 51-file / 252-test frontend suite, full 36-test Rust suite, production web build, local HTTP check and macOS `KnightClub.app` bundle passed. Target contracts require an integer in-range ply and exact canonical FEN, retain a matching pre-reply prefix and reject stale/mismatched positions; Review initializes to a verified target before analysis begins. A manual handoff walkthrough remains release handoff work.
 - Play preview navigation: lint, typecheck, the 51-file / 251-test frontend suite and full 36-test Rust suite passed. Pure preview-state contracts cover first/latest bounds, invalid input and a bot-appended history; presentation contracts retain named Previous, Next and Return to live controls. Production web and macOS bundle checks remain recorded below; a manual Play replay walkthrough remains release handoff work.
 - Mobile Review navigation: lint, typecheck, the 50-file / 247-test frontend suite and full 36-test Rust suite passed. The Review contract fixes the picker’s labelled Start/SAN options and source order immediately after board navigation while retaining the full labelled notation list. Production web and macOS bundle checks remain recorded below; a manual phone-width browser/desktop walkthrough remains release handoff work.
 - Displayed-FEN follow-up: lint, typecheck, the 50-file / 247-test frontend suite, production web build, local HTTP check and macOS `KnightClub.app` bundle passed. Preview status now explicitly discloses that the live clock continues, and Position tools use the displayed board FEN with preview-specific labels. A manual preview-copy browser/desktop check remains release handoff work.

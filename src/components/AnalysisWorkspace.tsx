@@ -44,6 +44,10 @@ import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { MoveClassification, ReviewedMove } from '../review/reviewModel'
 import { buildCoachGuidanceFromTimeline, type CoachGuidance } from '../review/coach'
 import { evidenceSquaresForGuidance, reviewNavigationForKey, reviewPlyAfter } from '../review/reviewWorkspaceUtils'
+import {
+  resolvePlayPreviewReviewPly,
+  type PlayPreviewReviewTarget,
+} from '../review/playPreviewReviewTarget'
 import { createRetryItem, type RetryItem } from '../review/retry'
 import { saveRetryItemsSerially } from '../review/retryQueuePersistence'
 import {
@@ -74,6 +78,8 @@ interface AnalysisWorkspaceProps {
   onOpenRetryQueue?: (retryKey: string) => void
   requestedReviewTarget?: { reviewKey: string; sourcePly: number } | null
   onRequestedReviewTargetHandled?: () => void
+  requestedPlayPreviewTarget?: PlayPreviewReviewTarget | null
+  onRequestedPlayPreviewTargetHandled?: () => void
 }
 
 interface DisplayLine extends AnalysisLine {
@@ -262,9 +268,18 @@ export function AnalysisWorkspace({
   onOpenRetryQueue,
   requestedReviewTarget,
   onRequestedReviewTargetHandled,
+  requestedPlayPreviewTarget,
+  onRequestedPlayPreviewTargetHandled,
 }: AnalysisWorkspaceProps) {
   const [timeline, setTimeline] = useState(() => safeTimeline(currentPgn))
-  const [ply, setPly] = useState(() => safeTimeline(currentPgn).positions.length - 1)
+  const [ply, setPly] = useState(() => {
+    const initialTimeline = safeTimeline(currentPgn)
+    if (!requestedReviewTarget) {
+      const previewPly = resolvePlayPreviewReviewPly(initialTimeline, requestedPlayPreviewTarget)
+      if (previewPly !== null) return previewPly
+    }
+    return initialTimeline.positions.length - 1
+  })
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
   const [pgnInput, setPgnInput] = useState(currentPgn)
   const [fenInput, setFenInput] = useState('')
@@ -293,6 +308,7 @@ export function AnalysisWorkspace({
   const reviewAbort = useRef<AbortController | null>(null)
   const reviewLoadVersion = useRef(0)
   const reviewRunVersion = useRef(0)
+  const handledPlayPreviewTarget = useRef<PlayPreviewReviewTarget | null>(null)
   const mounted = useRef(true)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const fileImportGate = useRef(createLatestRequestGate())
@@ -473,6 +489,20 @@ export function AnalysisWorkspace({
       if (version === reviewLoadVersion.current) reviewLoadVersion.current += 1
     }
   }, [reviewKey, reviewStore, timeline.moves.length, timeline.startFen])
+
+  useEffect(() => {
+    if (!requestedPlayPreviewTarget
+      || handledPlayPreviewTarget.current === requestedPlayPreviewTarget) return
+
+    handledPlayPreviewTarget.current = requestedPlayPreviewTarget
+    // A Train retry has its own source-loading contract and always wins over
+    // the transient Play handoff if the two ever overlap.
+    if (!requestedReviewTarget) {
+      const targetPly = resolvePlayPreviewReviewPly(timeline, requestedPlayPreviewTarget)
+      if (targetPly !== null) setPly(targetPly)
+    }
+    onRequestedPlayPreviewTargetHandled?.()
+  }, [onRequestedPlayPreviewTargetHandled, requestedPlayPreviewTarget, requestedReviewTarget, timeline])
 
   useEffect(() => {
     if (!requestedReviewTarget) return

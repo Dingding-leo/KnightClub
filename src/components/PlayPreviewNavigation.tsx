@@ -1,10 +1,11 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
 
 interface PlayPreviewNavigationProps {
   ply: number
   maxPly: number
   onPrevious: () => void
   onNext: () => void
+  onReviewPosition: () => void
   onReturnToLive: () => void
 }
 
@@ -14,6 +15,7 @@ export function PlayPreviewNavigation({
   maxPly,
   onPrevious,
   onNext,
+  onReviewPosition,
   onReturnToLive,
 }: PlayPreviewNavigationProps) {
   return (
@@ -24,6 +26,9 @@ export function PlayPreviewNavigation({
       <output aria-live="polite">Move {ply} of {maxPly}</output>
       <button className="play-preview-navigation__step" type="button" onClick={onNext} disabled={ply >= maxPly}>
         <span>Next</span><ChevronRight size={16} aria-hidden="true" />
+      </button>
+      <button className="play-preview-navigation__review" type="button" onClick={onReviewPosition}>
+        <Search size={14} aria-hidden="true" /><span>Review this position</span>
       </button>
       <button className="board-return-live" type="button" onClick={onReturnToLive}>Return to live</button>
     </div>

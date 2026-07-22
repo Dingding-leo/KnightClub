@@ -105,6 +105,7 @@ describe('historical Play preview convenience contracts', () => {
         maxPly={5}
         onPrevious={vi.fn()}
         onNext={vi.fn()}
+        onReviewPosition={vi.fn()}
         onReturnToLive={vi.fn()}
       />,
     )
@@ -114,6 +115,7 @@ describe('historical Play preview convenience contracts', () => {
     expect(markup).toContain('>Previous<')
     expect(markup).toContain('Move 2 of 5')
     expect(markup).toContain('>Next<')
+    expect(markup).toContain('Review this position')
     expect(markup).toContain('Return to live')
   })
 })

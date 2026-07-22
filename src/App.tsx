@@ -434,6 +434,7 @@ export default function App() {
   const [tacticsState, setTacticsState] = useState<TacticsState>(() => loadBrowserTacticsState())
   const [requestedRetryKey, setRequestedRetryKey] = useState<string | null>(null)
   const [requestedReviewTarget, setRequestedReviewTarget] = useState<{ reviewKey: string; sourcePly: number } | null>(null)
+  const [requestedPlayPreviewTarget, setRequestedPlayPreviewTarget] = useState<{ sourcePly: number; expectedFen: string } | null>(null)
   const [databaseReady, setDatabaseReady] = useState(!desktop)
   const [databaseStatus, setDatabaseStatus] = useState<DatabaseStatus>(desktop
     ? { kind: 'migrating' as const, message: 'Preparing your private game database…' }
@@ -592,6 +593,17 @@ export default function App() {
     setPromotion(null)
     setPreviewPly(previewPlyAfter(action, previewPly, verbose.length))
   }, [previewPly, verbose.length])
+
+  const reviewPreviewPosition = useCallback(() => {
+    if (previewPly === null) return
+    setRequestedPlayPreviewTarget({ sourcePly: previewPly, expectedFen: previewGame.fen() })
+    setNotice('')
+    navigateTo('review')
+  }, [navigateTo, previewGame, previewPly])
+
+  useEffect(() => {
+    if (tab !== 'review' && requestedPlayPreviewTarget) setRequestedPlayPreviewTarget(null)
+  }, [requestedPlayPreviewTarget, tab])
 
   const reportTransfer = (ok: boolean, success: string, failure: string) => {
     setTransferNotice({ kind: ok ? 'success' : 'error', message: ok ? success : failure })
@@ -759,6 +771,10 @@ export default function App() {
 
   const clearRequestedReviewTarget = useCallback(() => {
     setRequestedReviewTarget(null)
+  }, [])
+
+  const clearRequestedPlayPreviewTarget = useCallback(() => {
+    setRequestedPlayPreviewTarget(null)
   }, [])
 
   const markLinkedGameReviewed = useCallback((review: PersistedReview) => {
@@ -1714,6 +1730,7 @@ export default function App() {
                   maxPly={history.length}
                   onPrevious={() => stepPreview('previous')}
                   onNext={() => stepPreview('next')}
+                  onReviewPosition={reviewPreviewPosition}
                   onReturnToLive={returnToLive}
                 />
               )}
@@ -1973,6 +1990,8 @@ export default function App() {
                 onOpenRetryQueue={openRetryQueue}
                 requestedReviewTarget={requestedReviewTarget}
                 onRequestedReviewTargetHandled={clearRequestedReviewTarget}
+                requestedPlayPreviewTarget={requestedPlayPreviewTarget}
+                onRequestedPlayPreviewTargetHandled={clearRequestedPlayPreviewTarget}
               />
             </Suspense>
           </WorkspaceLoadBoundary>
