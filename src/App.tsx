@@ -562,12 +562,10 @@ export default function App() {
     && !gameFinished
     && (mode !== 'bot' || verbose.some((move) => move.color === humanColor))
   const currentStatus = termination?.status ?? gameStatus(game)
-  // A fresh bot game is already playable, but a side-neutral turn label makes
-  // its primary action easy to miss among the setup choices. Keep every
-  // tactical/blocked state above it (check, decisions, promotion, pauses and
-  // engine activity) so this only clarifies the untouched human opening.
-  const freshHumanOpening = mode === 'bot'
-    && history.length === 0
+  // A playable bot turn needs a role-aware action cue instead of making the
+  // player translate a side-neutral color label. Keep every tactical/blocked
+  // state above it (check, decisions, promotion, pauses and engine activity).
+  const clearHumanTurn = mode === 'bot'
     && !gameFinished
     && !decision
     && !promotion
@@ -575,13 +573,19 @@ export default function App() {
     && !game.inCheck()
     && Boolean(clock.activeColor)
     && isHumanTurn(mode, game.turn(), humanColor)
+  const latestBotMove = clearHumanTurn && last?.color === botColor ? last : null
   const boardStatus = previewStatus
     ?? (premoveWindow
       ? `${opponentName} is thinking — queue one premove.`
-      : freshHumanOpening ? 'Your move' : currentStatus)
-  const boardStatusLabel = freshHumanOpening
-    ? 'Your move — choose a piece to begin.'
-    : previewStatus ?? undefined
+      : latestBotMove ? `Your move · ${opponentName} played ${latestBotMove.san}`
+      : clearHumanTurn ? 'Your move' : currentStatus)
+  const boardStatusLabel = latestBotMove
+    ? `Your move — ${opponentName} played ${latestBotMove.san}. Choose a piece to continue.`
+    : clearHumanTurn
+      ? history.length === 0
+        ? 'Your move — choose a piece to begin.'
+        : 'Your move — choose a piece to continue.'
+      : previewStatus ?? undefined
   const currentResult = termination?.result ?? gameResult(game)
   const livePgn = useMemo(() => game.pgn(), [game])
   const sharePgn = useMemo(() => gameFinished
@@ -1740,7 +1744,13 @@ export default function App() {
             <div className="board-stage">
               <div className="board-status">
                 <div className="board-status__summary">
-                  <span aria-label={boardStatusLabel} title={boardStatusLabel}>{boardStatus}</span>
+                  <span
+                    role={latestBotMove ? 'status' : undefined}
+                    aria-live={latestBotMove ? 'polite' : undefined}
+                    aria-atomic={latestBotMove ? true : undefined}
+                    aria-label={boardStatusLabel}
+                    title={boardStatusLabel}
+                  >{boardStatus}</span>
                   <strong>Material {formatEvaluation(evaluateMaterial(previewGame, 'w'))}</strong>
                 </div>
                 <div className="board-status__actions">

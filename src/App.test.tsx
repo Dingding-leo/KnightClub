@@ -46,6 +46,21 @@ describe('bot player-side setup', () => {
     expect(freshMarkup).toContain('aria-label="Your move — choose a piece to begin."')
     expect(freshMarkup).toContain('title="Your move — choose a piece to begin."')
 
+    const continuingMarkup = renderApp({
+      pgn: '1. e4 e5',
+      startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      mode: 'bot',
+      botLevel: 'balanced',
+      orientation: 'white',
+      humanColor: 'w',
+      colorChoice: 'white',
+    })
+    expect(continuingMarkup).toContain('>Your move · Rowan Pike played e5</span>')
+    expect(continuingMarkup).toContain('role="status"')
+    expect(continuingMarkup).toContain('aria-live="polite"')
+    expect(continuingMarkup).toContain('aria-atomic="true"')
+    expect(continuingMarkup).toContain('aria-label="Your move — Rowan Pike played e5. Choose a piece to continue."')
+
     const blackMarkup = renderApp({
       pgn: '',
       startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
@@ -57,6 +72,18 @@ describe('bot player-side setup', () => {
     })
     expect(blackMarkup).toContain('>Rowan Pike is thinking — queue one premove.</span>')
     expect(blackMarkup).not.toContain('>Your move</span>')
+
+    const blackTurnMarkup = renderApp({
+      pgn: '1. e4',
+      startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      mode: 'bot',
+      botLevel: 'balanced',
+      orientation: 'black',
+      humanColor: 'b',
+      colorChoice: 'black',
+    })
+    expect(blackTurnMarkup).toContain('>Your move · Rowan Pike played e4</span>')
+    expect(blackTurnMarkup).toContain('aria-label="Your move — Rowan Pike played e4. Choose a piece to continue."')
 
     const hotSeatMarkup = renderApp({
       pgn: '',

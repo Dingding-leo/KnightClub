@@ -93,7 +93,7 @@
 - Review opens with Quick one-line analysis and waits for any pending bot turn instead of intentionally competing for local CPU.
 - Review's board-adjacent navigator now names the selected SAN move alongside its compact ply count, so a handoff or arrow press has visible context without scrolling to the notation panel.
 - A successful real Stockfish Play result now marks the engine ready with its returned identity/path; local opening cues remain unverified, while KnightBot fallback, malformed identity and non-abort failure paths show an honest error rather than a stale ready state.
-- A fresh, playable bot game now says **Your move** with an accessible first-action cue, while bot-first, hot-seat, check, decision, promotion, paused and preview states retain their higher-priority status.
+- Every playable bot turn now says **Your move** with an accessible action cue; after a bot reply it also names the opponent's latest SAN in a polite atomic status, while bot-first, hot-seat, check, decision, promotion, paused and preview states retain their higher-priority status.
 - Review now notices only a strict per-ply FEN continuation of the live game and offers an explicit **Update review** action; it never changes the board automatically or lets an old full-game review survive the player-approved update.
 - Production browser builds register the service worker; development and Tauri do not, while desktop startup removes stale PWA caches left by earlier Tauri builds
 - Fresh timed games are armed until the first legal move instead of charging while the player is choosing an opening
