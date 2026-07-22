@@ -393,6 +393,7 @@ export default function App() {
   const [customIncrement, setCustomIncrement] = useState('0')
   const [customDelay, setCustomDelay] = useState('0')
   const [customTimeOpen, setCustomTimeOpen] = useState(initial.timeControl.category === 'custom')
+  const [setupOpen, setSetupOpen] = useState(() => initial.game.history().length === 0)
   const [selected, setSelected] = useState<Square | null>(null)
   const [promotion, setPromotion] = useState<Promotion | null>(null)
   const [premove, setPremove] = useState<QueuedPremove | null>(null)
@@ -419,6 +420,7 @@ export default function App() {
   const clockNowRef = useRef(Date.now())
   const workspaceTitle = useRef<HTMLHeadingElement | null>(null)
   const previousWorkspace = useRef<Tab>('play')
+  const setupAutoCollapsed = useRef(initial.game.history().length > 0)
   const premoveRef = useRef<QueuedPremove | null>(premove)
   const retryItemsRef = useRef(retryItems)
   const tacticsStateRef = useRef(tacticsState)
@@ -442,6 +444,11 @@ export default function App() {
   const navigateTo = useCallback((next: Tab) => {
     setTab((current) => current === next ? current : next)
   }, [])
+
+  const openFreshGameSetup = () => {
+    setupAutoCollapsed.current = false
+    setSetupOpen(true)
+  }
 
   const botRequestVersion = useRef(0)
   const engineProbeVersion = useRef(0)
@@ -504,6 +511,12 @@ export default function App() {
     ? completedPgn(game, startFen, currentResult, currentStatus)
     : game.pgn() || `[SetUp "1"]\n[FEN "${game.fen()}"]\n\n*`,
   [game, gameFinished, startFen, currentResult, currentStatus])
+
+  useEffect(() => {
+    if (history.length === 0 || setupAutoCollapsed.current) return
+    setupAutoCollapsed.current = true
+    setSetupOpen(false)
+  }, [history.length])
 
   const reportTransfer = (ok: boolean, success: string, failure: string) => {
     setTransferNotice({ kind: ok ? 'success' : 'error', message: ok ? success : failure })
@@ -841,6 +854,7 @@ export default function App() {
     botRequestVersion.current += 1
     botClient.current?.cancel()
     clearPremove()
+    openFreshGameSetup()
     setGame(next); setStartFen(nextStartFen); setSelected(null); setPromotion(null)
     setClock(newClock(control, next.turn())); setClockHistory([]); setTermination(null); setDecision(null)
     savedPosition.current = null; clearPersistedSession(); setThinking(false); setNotice(message)
@@ -1147,6 +1161,8 @@ export default function App() {
           setGame(next); setStartFen(restoredStartFen)
           setTimeControl(control); setClock(next.isGameOver() || restoredTermination ? pauseClock(restoredClock, now) : restoredClock)
           setClockHistory([]); setTermination(restoredTermination); setDecision(null)
+          setupAutoCollapsed.current = next.history().length > 0
+          setSetupOpen(!setupAutoCollapsed.current)
           setMode(item.mode); setHumanColor(restoredHumanColor); setColorChoice(restoredColorChoice)
           if (item.mode === 'bot') setOrientation(restoredHumanColor === 'w' ? 'white' : 'black')
           if (item.mode === 'bot') {
@@ -1253,6 +1269,8 @@ export default function App() {
         setHumanColor(restored.humanColor); setColorChoice(restored.colorChoice)
         setTimeControl(restored.timeControl); setClock(restored.clock)
         setClockHistory(restored.clockHistory); setTermination(restored.termination)
+        setupAutoCollapsed.current = restored.game.history().length > 0
+        setSetupOpen(!setupAutoCollapsed.current)
         setSoundsEnabled(preferences.soundsEnabled); setEngineSettings(preferences.engine)
         setLibrary(snapshot.games)
         // A Review action can save to browser storage while desktop hydration
@@ -1498,6 +1516,9 @@ export default function App() {
 
   const topPlayer = playerFor(topColor)
   const bottomPlayer = playerFor(bottomColor)
+  const setupSummary = mode === 'bot'
+    ? `${opponentName} · You: ${humanSideLabel} · ${timeControl.label}`
+    : `Hot-seat · ${timeControl.label}`
 
   return (
     <ClockRuntime state={clock} gameFinished={gameFinished} onTick={captureClockNow} onFlag={handleClockFlag}>
@@ -1605,122 +1626,140 @@ export default function App() {
                 <span className="live-dot" title="Session saved locally" />
               </div>
 
-              <section className="game-setup" aria-label="Game setup">
-                <div className="segmented-control">
-                  <button type="button" className={mode === 'bot' ? 'is-active' : ''} aria-pressed={mode === 'bot'} onClick={() => switchMode('bot')}><Bot size={17} />Vs bot</button>
-                  <button type="button" className={mode === 'local' ? 'is-active' : ''} aria-pressed={mode === 'local'} onClick={() => switchMode('local')}><Users size={17} />Hot-seat</button>
-                </div>
-                {mode === 'bot' && (
-                  <>
-                    <div className="color-choice" aria-describedby="color-choice-hint">
-                      <div className="color-choice__heading">
-                        <span>Play as</span>
-                        <small>{colorChoice === 'random' ? `Random draw · ${humanSideLabel}` : `You are ${humanSideLabel}`}</small>
-                      </div>
-                      <div className="color-choice__options" role="group" aria-label="Play as">
-                        <button
-                          type="button"
-                          className={colorChoice === 'white' ? 'is-active' : ''}
-                          aria-pressed={colorChoice === 'white'}
-                          onClick={() => chooseHumanColor('white')}
-                        >
-                          <span className="color-choice__piece"><ChessPiece color="w" type="k" /></span>
-                          <span>White</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={colorChoice === 'black' ? 'is-active' : ''}
-                          aria-pressed={colorChoice === 'black'}
-                          onClick={() => chooseHumanColor('black')}
-                        >
-                          <span className="color-choice__piece"><ChessPiece color="b" type="k" /></span>
-                          <span>Black</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={colorChoice === 'random' ? 'is-active' : ''}
-                          aria-pressed={colorChoice === 'random'}
-                          onClick={() => chooseHumanColor('random')}
-                        >
-                          <RefreshCw size={16} aria-hidden="true" />
-                          <span>Random</span>
-                        </button>
-                      </div>
-                      <small id="color-choice-hint" className="color-choice__hint">
-                        {colorChoice === 'random'
-                          ? `The draw resolved to ${humanSideLabel}. Start a new game to draw again.`
-                          : 'The board starts from your side; Flip remains available anytime.'}
-                      </small>
+              <details
+                className="game-setup"
+                open={setupOpen}
+                onToggle={(event) => {
+                  if (event.target !== event.currentTarget) return
+                  setSetupOpen(event.currentTarget.open)
+                }}
+              >
+                <summary>
+                  <span>
+                    <strong>Game setup</strong>
+                    <small>{setupSummary}</small>
+                  </span>
+                  <ChevronDown size={16} />
+                </summary>
+                {setupOpen && (
+                  <div className="game-setup__body">
+                    <div className="segmented-control">
+                      <button type="button" className={mode === 'bot' ? 'is-active' : ''} aria-pressed={mode === 'bot'} onClick={() => switchMode('bot')}><Bot size={17} />Vs bot</button>
+                      <button type="button" className={mode === 'local' ? 'is-active' : ''} aria-pressed={mode === 'local'} onClick={() => switchMode('local')}><Users size={17} />Hot-seat</button>
                     </div>
-                    <BotProfilePicker
-                      selectedId={botProfileId}
-                      customEngine={engineSettings.profile !== 'preset'}
-                      onSelect={chooseBotProfile}
-                    />
-                    <EngineSettingsPanel
-                      settings={engineSettings}
-                      desktop={desktop}
-                      status={engineStatus}
-                      onChange={(settings) => setEngineSettings(normalizeEngineSettings(settings))}
-                      onChooseExecutable={() => { void chooseEngineExecutable() }}
-                      onUseAutomatic={useAutomaticEngine}
-                      onVerify={() => { void verifyEngine(engineSettings.enginePath) }}
-                    />
-                  </>
-                )}
-                <div className="quick-time-controls">
-                  <span>Quick start</span>
-                  <div role="group" aria-label="Quick time controls">
-                    {QUICK_TIME_CONTROLS.map(({ control, shortLabel }) => (
-                      <button
-                        key={control.id}
-                        type="button"
-                        className={timeControl.id === control.id && !customTimeOpen ? 'is-active' : ''}
-                        aria-pressed={timeControl.id === control.id && !customTimeOpen}
-                        title={`Start a new ${control.label} game`}
-                        onClick={() => {
-                          changeTimeControl(control)
-                        }}
-                      >
-                        {shortLabel}
+                    {mode === 'bot' && (
+                      <>
+                        <div className="color-choice" aria-describedby="color-choice-hint">
+                          <div className="color-choice__heading">
+                            <span>Play as</span>
+                            <small>{colorChoice === 'random' ? `Random draw · ${humanSideLabel}` : `You are ${humanSideLabel}`}</small>
+                          </div>
+                          <div className="color-choice__options" role="group" aria-label="Play as">
+                            <button
+                              type="button"
+                              className={colorChoice === 'white' ? 'is-active' : ''}
+                              aria-pressed={colorChoice === 'white'}
+                              onClick={() => chooseHumanColor('white')}
+                            >
+                              <span className="color-choice__piece"><ChessPiece color="w" type="k" /></span>
+                              <span>White</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={colorChoice === 'black' ? 'is-active' : ''}
+                              aria-pressed={colorChoice === 'black'}
+                              onClick={() => chooseHumanColor('black')}
+                            >
+                              <span className="color-choice__piece"><ChessPiece color="b" type="k" /></span>
+                              <span>Black</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={colorChoice === 'random' ? 'is-active' : ''}
+                              aria-pressed={colorChoice === 'random'}
+                              onClick={() => chooseHumanColor('random')}
+                            >
+                              <RefreshCw size={16} aria-hidden="true" />
+                              <span>Random</span>
+                            </button>
+                          </div>
+                          <small id="color-choice-hint" className="color-choice__hint">
+                            {colorChoice === 'random'
+                              ? `The draw resolved to ${humanSideLabel}. Start a new game to draw again.`
+                              : 'The board starts from your side; Flip remains available anytime.'}
+                          </small>
+                        </div>
+                        <BotProfilePicker
+                          selectedId={botProfileId}
+                          customEngine={engineSettings.profile !== 'preset'}
+                          onSelect={chooseBotProfile}
+                        />
+                        <EngineSettingsPanel
+                          settings={engineSettings}
+                          desktop={desktop}
+                          status={engineStatus}
+                          onChange={(settings) => setEngineSettings(normalizeEngineSettings(settings))}
+                          onChooseExecutable={() => { void chooseEngineExecutable() }}
+                          onUseAutomatic={useAutomaticEngine}
+                          onVerify={() => { void verifyEngine(engineSettings.enginePath) }}
+                        />
+                      </>
+                    )}
+                    <div className="quick-time-controls">
+                      <span>Quick start</span>
+                      <div role="group" aria-label="Quick time controls">
+                        {QUICK_TIME_CONTROLS.map(({ control, shortLabel }) => (
+                          <button
+                            key={control.id}
+                            type="button"
+                            className={timeControl.id === control.id && !customTimeOpen ? 'is-active' : ''}
+                            aria-pressed={timeControl.id === control.id && !customTimeOpen}
+                            title={`Start a new ${control.label} game`}
+                            onClick={() => {
+                              changeTimeControl(control)
+                            }}
+                          >
+                            {shortLabel}
+                          </button>
+                        ))}
+                      </div>
+                      <small>Clock starts with the opening move.</small>
+                    </div>
+                    <label className="select-field">
+                      <span>Time control</span>
+                      <select value={customTimeOpen || timeControl.category === 'custom' ? 'custom' : timeControl.id} onChange={(event) => {
+                        if (event.target.value === 'custom') setCustomTimeOpen(true)
+                        else changeTimeControl(getTimeControl(event.target.value))
+                      }} aria-label="Time control">
+                        {TIME_CONTROLS.map((control) => <option key={control.id} value={control.id}>{control.label}</option>)}
+                        <option value="custom">Custom…</option>
+                      </select>
+                    </label>
+                    {customTimeOpen && (
+                      <div className="custom-time" aria-label="Custom time control">
+                        <label><span>Minutes</span><input type="number" min="0.1" max="1440" step="0.1" value={customBase} onChange={(event) => setCustomBase(event.target.value)} /></label>
+                        <label><span>Increment</span><input type="number" min="0" max="600" value={customIncrement} onChange={(event) => setCustomIncrement(event.target.value)} /></label>
+                        <label><span>Delay</span><input type="number" min="0" max="600" value={customDelay} onChange={(event) => setCustomDelay(event.target.value)} /></label>
+                        <button className="secondary-button" type="button" onClick={applyCustomTimeControl}>Use custom time</button>
+                      </div>
+                    )}
+                    <div className="game-preferences">
+                      <button type="button" className="preference-toggle" aria-pressed={soundsEnabled} onClick={() => setSoundsEnabled((enabled) => !enabled)}>
+                        {soundsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                        <span><strong>Move sounds</strong><small>{soundsEnabled ? 'On · original synthesized audio' : 'Off'}</small></span>
                       </button>
-                    ))}
-                  </div>
-                  <small>Clock starts with the opening move.</small>
-                </div>
-                <label className="select-field">
-                  <span>Time control</span>
-                  <select value={customTimeOpen || timeControl.category === 'custom' ? 'custom' : timeControl.id} onChange={(event) => {
-                    if (event.target.value === 'custom') setCustomTimeOpen(true)
-                    else changeTimeControl(getTimeControl(event.target.value))
-                  }} aria-label="Time control">
-                    {TIME_CONTROLS.map((control) => <option key={control.id} value={control.id}>{control.label}</option>)}
-                    <option value="custom">Custom…</option>
-                  </select>
-                </label>
-                {customTimeOpen && (
-                  <div className="custom-time" aria-label="Custom time control">
-                    <label><span>Minutes</span><input type="number" min="0.1" max="1440" step="0.1" value={customBase} onChange={(event) => setCustomBase(event.target.value)} /></label>
-                    <label><span>Increment</span><input type="number" min="0" max="600" value={customIncrement} onChange={(event) => setCustomIncrement(event.target.value)} /></label>
-                    <label><span>Delay</span><input type="number" min="0" max="600" value={customDelay} onChange={(event) => setCustomDelay(event.target.value)} /></label>
-                    <button className="secondary-button" type="button" onClick={applyCustomTimeControl}>Use custom time</button>
+                    </div>
                   </div>
                 )}
-                <div className="game-preferences">
-                  <button type="button" className="preference-toggle" aria-pressed={soundsEnabled} onClick={() => setSoundsEnabled((enabled) => !enabled)}>
-                    {soundsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-                    <span><strong>Move sounds</strong><small>{soundsEnabled ? 'On · original synthesized audio' : 'Off'}</small></span>
-                  </button>
-                </div>
-                <div className="completion-actions" aria-label="Game completion actions">
-                  <button type="button" onClick={offerDraw} disabled={gameFinished || (mode === 'bot' && (thinking || !isHumanTurn(mode, game.turn(), humanColor)))}>
-                    <Handshake size={16} /><span>Offer draw</span>
-                  </button>
-                  <button type="button" onClick={() => openDecision('resign')} disabled={gameFinished}>
-                    <Flag size={16} /><span>Resign</span>
-                  </button>
-                </div>
-              </section>
+              </details>
+              <div className="completion-actions" aria-label="Game completion actions">
+                <button type="button" onClick={offerDraw} disabled={gameFinished || (mode === 'bot' && (thinking || !isHumanTurn(mode, game.turn(), humanColor)))}>
+                  <Handshake size={16} /><span>Offer draw</span>
+                </button>
+                <button type="button" onClick={() => openDecision('resign')} disabled={gameFinished}>
+                  <Flag size={16} /><span>Resign</span>
+                </button>
+              </div>
 
               <section className="game-panel__moves">
                 <div className="section-heading"><div><span className="eyebrow">Notation</span><h3>Moves</h3></div><span>{history.length ? `${history.length} ply` : 'Ready'}</span></div>

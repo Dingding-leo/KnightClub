@@ -42,6 +42,8 @@ During a local bot turn, one human premove may be queued without restarting the 
 
 New game, time-control, mode, FEN-load and saved-game actions share one restart gate. It asks for confirmation only when replacing an unfinished game, pauses the current clock while the decision is open, and restores that clock on cancel. The board keeps click/tap and keyboard selection while Pointer Events with capture make drag-to-move work for mouse, touch and pen without a separate HTML drag implementation.
 
+Play setup uses progressive disclosure rather than permanently placing configuration ahead of the current game. A zero-ply session starts with the native setup disclosure open; the first recorded ply closes it once, leaving an original compact opponent/side/time summary, accessible Draw/Resign actions and notation above the fold. Restarting a fresh game opens it again, while a user who later reopens it keeps it open until another fresh session begins. The disclosure body is unmounted while closed, so inactive opponent, engine and time controls do not participate in ordinary in-game rendering.
+
 ### Workspace-navigation handoff
 
 A primary-workspace change is a navigation handoff, not a game-state action. After React has rendered a different Play, Review, Train or Library workspace, the shared handoff contract moves the window to the top and places programmatic focus on the current `#workspace-title` with `preventScroll`. The `<main>` landmark is named by that same title through `aria-labelledby="workspace-title"`, while the heading's `tabIndex={-1}` keeps it out of the ordinary tab sequence.

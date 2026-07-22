@@ -20,6 +20,8 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 
 **Latest Review/persistence performance evidence (2026-07-23):** lint and typecheck passed; `npm test` passed with 49 files / 230 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 32 tests; production web and macOS Tauri builds passed; and the local Vite endpoint returned HTTP 200. The Review contract locks the shared inert board callbacks/targets, while deferred database contracts prove queued snapshots retain only the newest payload, a live write never overlaps its successor, failures settle every coalesced caller, invalid data never crosses the boundary, and normal writes/clear-session actions retain FIFO barriers. A manual long-PGN Review responsiveness walkthrough remains release handoff work.
 
+**Latest Play-flow evidence (2026-07-23):** lint and typecheck passed; `npm test` passed with 49 files / 231 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 32 tests; production web and macOS Tauri builds passed; and the local Vite endpoint returned HTTP 200. SSR contracts prove fresh setup starts open with its compact summary, while restored in-progress play hides inactive configuration and retains completion actions. The first-ply/mobile disclosure walkthrough remains release handoff work.
+
 ## Workspace-navigation user check
 
 1. In **Play**, scroll the page to a measurable non-zero position (for example, 550 px), then select **Review**. Confirm the page starts at the top and the current workspace heading receives focus without being scrolled away.
@@ -147,6 +149,7 @@ Frontend tests cover chess rules, clock presets/formatting plus visible-value ti
 1. With a non-empty unfinished game, request New game, another mode, another time control, FEN load and a saved-game open. Each action must first offer Keep playing; cancelling must preserve the board and clock.
 2. Drag a legal piece with a mouse, touch device and pen where available. Click/tap selection, keyboard selection and promotion must still work after a drag.
 3. In Library, search by game text, switch All/Reviewed/Unreviewed filters, reveal aborted zero-ply records only on request, and use the separate Open board and Review actions.
+4. Start a fresh game and confirm Game setup is open with opponent, side and time controls visible. After the first ply, confirm it collapses to its compact summary while Draw, Resign and notation remain visible; start another fresh game to confirm setup reopens. Toggle the native summary with keyboard Enter/Space and confirm selected opponent/time values remain intact.
 
 ## Desktop board-clarity check
 

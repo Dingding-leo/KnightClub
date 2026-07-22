@@ -21,6 +21,9 @@ describe('bot player-side setup', () => {
   it('presents accessible White, Black and Random choices for a fresh game', () => {
     const markup = renderApp()
 
+    expect(markup).toContain('<details class="game-setup" open="">')
+    expect(markup).toContain('Game setup')
+    expect(markup).toContain('Rowan Pike · You: White')
     expect(markup).toContain('aria-label="Play as"')
     expect(markup).toContain('>White<')
     expect(markup).toContain('>Black<')
@@ -31,6 +34,26 @@ describe('bot player-side setup', () => {
     expect(markup).toContain('Mira Vale')
     expect(markup).toContain('Rowan Pike')
     expect(markup).toContain('Nia Cross')
+  })
+
+  it('collapses setup for an in-progress game while keeping completion actions visible', () => {
+    const markup = renderApp({
+      pgn: '1. e4 e5',
+      startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      mode: 'bot',
+      botLevel: 'balanced',
+      orientation: 'white',
+      humanColor: 'w',
+      colorChoice: 'white',
+    })
+
+    expect(markup).toContain('<details class="game-setup">')
+    expect(markup).not.toContain('<details class="game-setup" open="">')
+    expect(markup).toContain('Rowan Pike · You: White')
+    expect(markup).not.toContain('Choose a local opponent')
+    expect(markup).toContain('aria-label="Game completion actions"')
+    expect(markup).toContain('Offer draw')
+    expect(markup).toContain('Resign')
   })
 
   it('restores a persisted Black-side bot session without redrawing its random choice', () => {

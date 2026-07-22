@@ -551,7 +551,30 @@ button { -webkit-tap-highlight-color: transparent; }
 
 .game-panel__header h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: -.02em; }
 
-.game-setup { padding: 13px 15px; border-bottom: 1px solid rgba(255, 255, 255, .065); }
+.game-setup {
+  border-bottom: 1px solid rgba(255, 255, 255, .065);
+}
+
+.game-setup > summary {
+  min-height: 52px;
+  padding: 0 15px;
+  list-style: none;
+  color: var(--muted-strong);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.game-setup > summary::-webkit-details-marker { display: none; }
+.game-setup > summary > span { min-width: 0; display: grid; gap: 2px; }
+.game-setup > summary strong { color: var(--text); font-size: 11px; }
+.game-setup > summary small { overflow: hidden; color: var(--muted); font-size: 9px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.game-setup > summary > svg { flex: 0 0 auto; color: var(--muted); transition: transform .15s ease; }
+.game-setup[open] > summary { border-bottom: 1px solid rgba(255, 255, 255, .065); }
+.game-setup[open] > summary > svg { transform: rotate(180deg); }
+.game-setup__body { padding: 13px 15px; }
 
 .segmented-control {
   padding: 4px;
@@ -887,7 +910,7 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
 .preference-toggle strong { font-size: 10px; }
 .preference-toggle small { color: var(--muted); font-size: 9px; }
 
-.completion-actions { margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.completion-actions { margin: 9px 15px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 
 .completion-actions button {
   min-height: 36px;
