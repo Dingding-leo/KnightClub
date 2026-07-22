@@ -551,7 +551,7 @@ export default function App() {
   const history = useMemo(() => verbose.map((move) => move.san), [verbose])
   const previewing = previewPly !== null
   const previewGame = useMemo(
-    () => previewPly === null ? game : cloneGameAtPly(startFen, verbose, previewPly),
+    () => previewPly === null ? game : cloneGameAtPly(startFen, verbose, previewPly, game),
     [game, previewPly, startFen, verbose],
   )
   const positionTransfer = useMemo(

@@ -40,6 +40,55 @@ function snapshotGame(game: Chess): Chess | null {
   }
 }
 
+/**
+ * chess.js keeps its undo stack private. It is safe to use only as an
+ * optional fast-path guard here: if a future chess.js release changes that
+ * representation, callers fall back to replaying the public verbose moves.
+ */
+function historyDepth(game: Chess): number | null {
+  const candidate = game as unknown as { _history?: unknown }
+  return Array.isArray(candidate._history) ? candidate._history.length : null
+}
+
+function sameHistoricalMove(left: Move, right: Move): boolean {
+  return left.color === right.color
+    && left.from === right.from
+    && left.to === right.to
+    && left.piece === right.piece
+    && left.captured === right.captured
+    && left.promotion === right.promotion
+}
+
+/**
+ * When a player is stepping through the later half of a live game, copying
+ * the current position and undoing its short suffix is much cheaper than
+ * replaying the entire opening. Every private-state assumption is checked
+ * against public move/FEN data, so an unexpected snapshot simply falls back
+ * to the established replay path.
+ */
+function snapshotHistoricalPosition(
+  sourceGame: Chess,
+  verboseHistory: readonly Move[],
+  targetPly: number,
+): Chess | null {
+  const snapshot = snapshotGame(sourceGame)
+  const latest = verboseHistory.at(-1)
+  if (!snapshot
+    || !latest
+    || historyDepth(snapshot) !== verboseHistory.length
+    || snapshot.fen() !== latest.after) return null
+
+  for (let index = verboseHistory.length - 1; index >= targetPly; index -= 1) {
+    const undone = snapshot.undo()
+    if (!undone || !sameHistoricalMove(undone, verboseHistory[index])) return null
+  }
+
+  const expectedFen = verboseHistory[targetPly - 1]?.after
+  return historyDepth(snapshot) === targetPly && snapshot.fen() === expectedFen
+    ? snapshot
+    : null
+}
+
 export function cloneGame(
   game: Chess,
   startFen = STANDARD_START_FEN,
@@ -63,11 +112,20 @@ export function cloneGameAtPly(
   startFen: string,
   verboseHistory: readonly Move[],
   ply: number,
+  sourceGame?: Chess,
 ): Chess {
   const requestedPly = Number.isFinite(ply) ? Math.trunc(ply) : 0
   const boundedPly = Math.max(0, Math.min(verboseHistory.length, requestedPly))
+  // Preview navigation usually starts from the newest position and moves
+  // backwards. For that later half, clone once and undo the smaller suffix.
+  // The complete source game is optional to preserve the public helper's
+  // replay-only behavior for imported or otherwise detached timelines.
+  if (sourceGame && boundedPly > verboseHistory.length / 2) {
+    const snapshot = snapshotHistoricalPosition(sourceGame, verboseHistory, boundedPly)
+    if (snapshot) return snapshot
+  }
   // A historical preview intentionally represents only a prefix, so it must
-  // use the replay path rather than the complete live-game snapshot.
+  // use the replay path when a verified current-game snapshot is unavailable.
   const clone = new Chess(startFen)
   for (const move of verboseHistory.slice(0, boundedPly)) {
     clone.move({ from: move.from, to: move.to, promotion: move.promotion })

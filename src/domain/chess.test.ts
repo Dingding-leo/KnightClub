@@ -58,6 +58,39 @@ describe('chess domain', () => {
     expect(cloneGameAtPly(startFen, verbose, 99).history()).toEqual(game.history())
   })
 
+  it('uses a verified current-game snapshot for a late history preview', () => {
+    const game = new Chess()
+    for (const move of ['e4', 'c5', 'Nf3', 'd6', 'd4', 'cxd4', 'Nxd4', 'Nf6', 'Nc3', 'a6']) {
+      game.move(move)
+    }
+    const verbose = game.history({ verbose: true })
+    const expected = cloneGameAtPly(new Chess().fen(), verbose, 9)
+    const moveSpy = vi.spyOn(Chess.prototype, 'move')
+
+    const preview = cloneGameAtPly(new Chess().fen(), verbose, 9, game)
+
+    expect(moveSpy).not.toHaveBeenCalled()
+    expect(preview.fen()).toBe(expected.fen())
+    expect(preview.history()).toEqual(expected.history())
+    expect(game.history()).toHaveLength(10)
+    moveSpy.mockRestore()
+  })
+
+  it('falls back to prefix replay when the optional source game is not the requested history', () => {
+    const game = new Chess()
+    for (const move of ['e4', 'c5', 'Nf3', 'd6', 'd4', 'cxd4', 'Nxd4', 'Nf6', 'Nc3', 'a6']) {
+      game.move(move)
+    }
+    const verbose = game.history({ verbose: true })
+    const moveSpy = vi.spyOn(Chess.prototype, 'move')
+
+    const preview = cloneGameAtPly(new Chess().fen(), verbose, 9, new Chess())
+
+    expect(moveSpy).toHaveBeenCalledTimes(9)
+    expect(preview.history()).toEqual(game.history().slice(0, 9))
+    moveSpy.mockRestore()
+  })
+
   it('evaluates captured material from white perspective', () => {
     const game = new Chess()
     game.move('e4')
