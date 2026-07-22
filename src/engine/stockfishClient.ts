@@ -3,6 +3,11 @@ import type { BotLevel, MoveInput } from '../domain/chess'
 import { BrowserStockfishEngine } from './browserStockfish'
 import { BotWorkerClient } from './botWorkerClient'
 import {
+  normalizePlayCandidates,
+  parseUciMove,
+  type EngineCandidate,
+} from './playCandidates'
+import {
   DEFAULT_ENGINE_SETTINGS,
   normalizeEngineSettings,
   type EngineSettings,
@@ -21,11 +26,14 @@ export interface StockfishCommandResponse {
   depth: number | null
   nodes: number | null
   nps: number | null
+  lines?: unknown[]
 }
 
 export interface EngineSearchResult {
   move: MoveInput | null
   ponder: MoveInput | null
+  /** Alternatives from the same bounded search, never a separate engine call. */
+  candidates: EngineCandidate[]
   /** `opening-cue` is authored and validated in Play before an engine search begins. */
   provider: 'stockfish' | 'knightbot' | 'opening-cue'
   engineName: string
@@ -36,6 +44,8 @@ export interface EngineSearchResult {
   nps?: number | null
   warning?: string
 }
+
+export { parseUciMove } from './playCandidates'
 
 export interface StockfishProbeResult {
   engineName: string
@@ -49,15 +59,6 @@ function abortError(message: string): Error {
 }
 
 const defaultInvoke: Invoke = (command, args) => tauriInvoke(command, args)
-
-export function parseUciMove(value: string | null): MoveInput | null {
-  if (!value || !/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(value)) return null
-  return {
-    from: value.slice(0, 2) as MoveInput['from'],
-    to: value.slice(2, 4) as MoveInput['to'],
-    promotion: value.length === 5 ? value[4] as MoveInput['promotion'] : undefined,
-  }
-}
 
 export class StockfishClient {
   private readonly invoke: Invoke
@@ -73,6 +74,7 @@ export class StockfishClient {
     fen: string,
     level: BotLevel,
     settings: EngineSettings = DEFAULT_ENGINE_SETTINGS,
+    candidateCount?: 1 | 2,
   ): Promise<EngineSearchResult> {
     this.cancel()
     const requestId = this.nextRequestId++
@@ -82,7 +84,14 @@ export class StockfishClient {
     let raw: unknown
     try {
       raw = await this.invoke('stockfish_best_move', {
-        request: { requestId, fen, level, enginePath, settings: searchSettings },
+        request: {
+          requestId,
+          fen,
+          level,
+          enginePath,
+          settings: searchSettings,
+          ...(candidateCount === undefined ? {} : { candidateCount }),
+        },
       })
     } catch (error) {
       if (this.activeRequestId !== requestId) {
@@ -101,6 +110,7 @@ export class StockfishClient {
     return {
       move,
       ponder: parseUciMove(response.ponder),
+      candidates: normalizePlayCandidates(response.lines),
       provider: 'stockfish',
       engineName: response.engineName,
       enginePath: response.enginePath,
@@ -142,17 +152,19 @@ export class HybridEngineClient {
     fen: string,
     level: BotLevel,
     settings: EngineSettings = DEFAULT_ENGINE_SETTINGS,
+    candidateCount?: 1 | 2,
   ): Promise<EngineSearchResult> {
     if (this.disposed) throw new Error('Engine client is disposed.')
     if (this.desktop) {
       try {
-        return await this.stockfish.search(fen, level, settings)
+        return await this.stockfish.search(fen, level, settings, candidateCount)
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') throw error
         const move = await this.fallbackClient().search(fen, level)
         return {
           move,
           ponder: null,
+          candidates: [],
           provider: 'knightbot',
           engineName: 'KnightBot fallback',
           warning: error instanceof Error ? error.message : 'Stockfish was unavailable.',
@@ -160,10 +172,11 @@ export class HybridEngineClient {
       }
     }
     try {
-      const result = await this.browserEngine().searchMove(fen, level, settings)
+      const result = await this.browserEngine().searchMove(fen, level, settings, candidateCount)
       return {
         move: parseUciMove(result.bestMove),
         ponder: parseUciMove(result.ponder),
+        candidates: normalizePlayCandidates(result.lines),
         provider: 'stockfish',
         engineName: result.engineName,
         enginePath: result.enginePath,
@@ -177,6 +190,7 @@ export class HybridEngineClient {
       return {
         move: await this.fallbackClient().search(fen, level),
         ponder: null,
+        candidates: [],
         provider: 'knightbot',
         engineName: 'KnightBot browser fallback',
         warning: error instanceof Error ? error.message : 'Browser Stockfish was unavailable.',

@@ -4,6 +4,9 @@
 
 ### Added
 
+- Named local opponents now receive two principal variations from one existing bounded play search and may select only a legal, exact-centipawn, close second line that demonstrably fits their declared forcing, classical or pressure preference
+- Play candidate selection is fail-closed: Stockfish’s original `bestmove` is retained for limited-strength PV mismatches, mates, score bounds, excessive score loss, stale/illegal candidates and all KnightBot fallbacks
+- Native UCI and browser WebAssembly play contracts now return safely normalized candidate telemetry without adding a second `go`, changing the single-thread setting, or raising the selected move-time/node cap
 - Three original named local opponents with accessible monogram cards, target-strength disclosure, local opening-cue feedback and result-aware post-game copy
 - Strictly legal, exact-history standard-start opening cues that apply a profile's real authored move without starting Stockfish, plus persistent profile IDs for active sessions, preferences and completed games
 - Original local Tactics Sprint: a three-position immediate practice path with no initial answer/PV exposure, local legal replay, two-stage hints, explicit reveal, reset and terminal outcome metrics

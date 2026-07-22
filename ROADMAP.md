@@ -29,7 +29,7 @@
 - [x] Single safe non-persisted premove during a local bot turn, with final legality checked after the bot reply
 - [x] Versioned desktop SQLite authority with transactional legacy import and corruption recovery
 - [x] First original named local opponent roster with legal zero-engine-cost opening cues and persistent selection
-- [ ] Human-like bot profiles using principled candidate move sampling beyond the authored opening route
+- [x] Human-like bot profiles using principled candidate move sampling beyond the authored opening route
 - [x] Analysis board with PGN/FEN replay, navigation and real MultiPV candidate lines
 - [ ] Analysis arrows, annotations, editable variations and position editor
 - [ ] Syzygy tablebase integration, local-first where storage permits

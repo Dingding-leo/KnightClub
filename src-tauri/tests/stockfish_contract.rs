@@ -1,10 +1,11 @@
 #![cfg(unix)]
 
 use knightclub_lib::stockfish::{
-    EngineError, EngineSupervisor, SearchSettingsRequest, discover_stockfish, go_command,
-    parse_bestmove, probe_stockfish, resolve_search_settings, strength_preset, uci_option_commands,
-    validate_fen,
+    BestMoveRequest, EngineError, EngineSupervisor, SearchSettingsRequest,
+    apply_play_candidate_count, discover_stockfish, go_command, parse_bestmove, probe_stockfish,
+    resolve_search_settings, strength_preset, uci_option_commands, validate_fen,
 };
+use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -137,6 +138,31 @@ fn validates_advanced_settings_and_builds_bounded_uci_commands() {
 }
 
 #[test]
+fn validates_and_serializes_optional_play_candidate_counts() {
+    let mut preset = strength_preset("balanced").expect("preset");
+    apply_play_candidate_count(&mut preset, Some(2)).expect("two candidates are allowed");
+    assert_eq!(preset.multi_pv, 2);
+    assert_eq!(go_command(&preset), "go movetime 160 nodes 30000");
+    assert!(apply_play_candidate_count(&mut preset, Some(3)).is_err());
+
+    let mut custom = preset.clone();
+    custom.multi_pv = 4;
+    apply_play_candidate_count(&mut custom, Some(2)).expect("higher custom MultiPV stays intact");
+    assert_eq!(custom.multi_pv, 4);
+
+    let request: BestMoveRequest = serde_json::from_value(json!({
+        "requestId": 1,
+        "fen": START_FEN,
+        "level": "balanced",
+        "enginePath": null,
+        "settings": null,
+        "candidateCount": 2
+    }))
+    .expect("candidate count request payload");
+    assert_eq!(request.candidate_count, Some(2));
+}
+
+#[test]
 fn explicit_executable_wins_discovery_and_must_be_executable() {
     let directory = fake_engine("exit 0");
     let explicit = engine_path(directory.path());
@@ -196,6 +222,68 @@ done
     assert_eq!(result.ponder.as_deref(), Some("g1f3"));
     assert_eq!(result.depth, Some(8));
     assert_eq!(result.nodes, Some(1200));
+}
+
+#[test]
+fn returns_two_play_candidates_from_one_bounded_uci_search() {
+    let (directory, command_log) = fake_engine_with_command_log(
+        r#"
+while IFS= read -r line; do
+  echo "$line" >> "$COMMAND_LOG"
+  case "$line" in
+    uci) echo "id name Candidate Fixture"; echo "uciok" ;;
+    isready) echo "readyok" ;;
+    go*)
+      echo "info depth 12 multipv 2 score cp invalid pv d2d4"
+      echo "info depth 12 seldepth 18 multipv 1 score cp 30 nodes 30000 nps 200000 pv e2e4 e7e5"
+      echo "info depth 12 seldepth 17 multipv 2 score cp 18 nodes 30000 nps 200000 pv d2d4 d7d5"
+      echo "bestmove e2e4 ponder e7e5"
+      ;;
+    quit) exit 0 ;;
+  esac
+done
+"#,
+    );
+    let mut engine = EngineSupervisor::new(engine_path(directory.path()));
+    let cancelled = AtomicU64::new(0);
+    let mut settings = strength_preset("balanced").expect("preset");
+    apply_play_candidate_count(&mut settings, Some(2)).expect("candidate options");
+
+    let result = engine
+        .best_move(START_FEN, &settings, Duration::from_secs(3), 12, &cancelled)
+        .expect("best move with candidates");
+
+    assert_eq!(result.best_move.as_deref(), Some("e2e4"));
+    assert_eq!(result.lines.len(), 2);
+    assert_eq!(result.lines[0].multi_pv, 1);
+    assert_eq!(result.lines[0].pv, vec!["e2e4", "e7e5"]);
+    assert_eq!(result.lines[1].multi_pv, 2);
+    assert_eq!(result.lines[1].pv, vec!["d2d4", "d7d5"]);
+
+    let commands = fs::read_to_string(command_log).expect("read command log");
+    let lines: Vec<_> = commands.lines().collect();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| **line == "setoption name Threads value 1")
+            .count(),
+        1
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| **line == "setoption name MultiPV value 2")
+            .count(),
+        1
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("go movetime "))
+            .copied()
+            .collect::<Vec<_>>(),
+        vec!["go movetime 160 nodes 30000"]
+    );
 }
 
 #[test]

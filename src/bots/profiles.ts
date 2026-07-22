@@ -1,10 +1,12 @@
 import { Chess, type Color } from 'chess.js'
 import { STANDARD_START_FEN, type BotLevel, type MoveInput } from '../domain/chess'
+import { uciForMove, type EngineCandidate } from '../engine/playCandidates'
 
 export const BOT_PROFILE_IDS = ['mira-vale', 'rowan-pike', 'nia-cross'] as const
 
 export type BotProfileId = typeof BOT_PROFILE_IDS[number]
 export type BotProfileTone = 'mira' | 'rowan' | 'nia'
+export type BotStylePreference = 'forcing' | 'classical' | 'pressure'
 
 export interface OpeningCue {
   /** Exact SAN main-line history required before this local move is offered. */
@@ -22,6 +24,14 @@ export interface BotProfile {
   targetElo: number
   engineLevel: BotLevel
   openingCueLabel: string
+  /** Two lines come from one existing bounded UCI search, never a second `go`. */
+  candidateCount: 2
+  candidatePolicy: {
+    preference: BotStylePreference
+    label: string
+    /** Never sacrifice more than this exact same-position engine score. */
+    maxCpLoss: number
+  }
   intro: string
   openingCues: readonly OpeningCue[]
   openingReactions: readonly string[]
@@ -35,9 +45,9 @@ export interface BotProfile {
 const move = (from: MoveInput['from'], to: MoveInput['to']): MoveInput => ({ from, to })
 
 /**
- * These are original KnightClub opponents. Their only claimed persona behavior
- * is the small, fully local opening route below; after that, the existing
- * bounded Stockfish preset supplies the documented strength.
+ * These are original KnightClub opponents. Exact opening cues keep the engine
+ * idle, while later profile choices can only select a close, legal alternative
+ * from the same fixed-budget two-line Stockfish search.
  */
 export const BOT_PROFILES: readonly BotProfile[] = [
   {
@@ -48,7 +58,9 @@ export const BOT_PROFILES: readonly BotProfile[] = [
     targetElo: 1320,
     engineLevel: 'easy',
     openingCueLabel: 'Opening cue · open centre',
-    intro: 'Starts with an open centre when the position follows her local route.',
+    candidateCount: 2,
+    candidatePolicy: { preference: 'forcing', label: 'forcing', maxCpLoss: 65 },
+    intro: 'Starts with an open centre and can favor a close forcing line after it.',
     openingCues: [
       { history: [], move: move('e2', 'e4') },
       { history: ['e4'], move: move('e7', 'e5') },
@@ -73,7 +85,9 @@ export const BOT_PROFILES: readonly BotProfile[] = [
     targetElo: 1700,
     engineLevel: 'balanced',
     openingCueLabel: 'Opening cue · claim the centre',
-    intro: 'Claims central space when the position follows his local route.',
+    candidateCount: 2,
+    candidatePolicy: { preference: 'classical', label: 'classical', maxCpLoss: 32 },
+    intro: 'Claims central space and can favor a close classical line after it.',
     openingCues: [
       { history: [], move: move('d2', 'd4') },
       { history: ['d4'], move: move('d7', 'd5') },
@@ -98,7 +112,9 @@ export const BOT_PROFILES: readonly BotProfile[] = [
     targetElo: 2200,
     engineLevel: 'strong',
     openingCueLabel: 'Opening cue · flank pressure',
-    intro: 'Builds pressure from the flank when the position follows her local route.',
+    candidateCount: 2,
+    candidatePolicy: { preference: 'pressure', label: 'pressure', maxCpLoss: 18 },
+    intro: 'Builds flank pressure and can prefer a close active line after it.',
     openingCues: [
       { history: [], move: move('c2', 'c4') },
       { history: ['c4'], move: move('e7', 'e5') },
@@ -173,9 +189,103 @@ export function selectProfileOpeningMove(
   }
 }
 
+export interface ProfileCandidateSelection {
+  move: MoveInput
+  /** True only when a profile safely chose the second line over Stockfish's move. */
+  usedStyle: boolean
+}
+
+interface MoveTraits {
+  move: MoveInput
+  forcing: number
+  classical: number
+  pressure: number
+}
+
+const CENTRAL_SQUARES = new Set(['c4', 'd4', 'e4', 'f4', 'c5', 'd5', 'e5', 'f5'])
+
+/**
+ * Reads a move on a throwaway board. Candidate telemetry is never trusted to
+ * mutate the visible game, which also makes malformed or stale PVs harmless.
+ */
+function moveTraits(game: Chess, move: MoveInput): MoveTraits | null {
+  try {
+    const trial = new Chess(game.fen())
+    const played = trial.move(move)
+    if (!played) return null
+    const capture = Boolean(played.captured)
+    const check = trial.isCheck()
+    const castle = played.isKingsideCastle() || played.isQueensideCastle()
+    const centralPawn = played.piece === 'p' && CENTRAL_SQUARES.has(played.to)
+    const developedMinor = (played.piece === 'n' || played.piece === 'b')
+      && played.from[1] === (played.color === 'w' ? '1' : '8')
+      && played.to[1] !== (played.color === 'w' ? '1' : '8')
+    const activePiece = played.piece !== 'p' && CENTRAL_SQUARES.has(played.to)
+    return {
+      move: { from: played.from, to: played.to, promotion: played.promotion },
+      forcing: (check ? 8 : 0) + (capture ? 5 : 0) + (played.promotion ? 3 : 0),
+      classical: (centralPawn ? 8 : 0) + (developedMinor ? 5 : 0) + (castle ? 4 : 0),
+      pressure: (check ? 6 : 0) + (capture ? 3 : 0) + (activePiece ? 4 : 0) + (centralPawn ? 2 : 0),
+    }
+  } catch {
+    return null
+  }
+}
+
+function styleScore(traits: MoveTraits, preference: BotStylePreference): number {
+  return traits[preference]
+}
+
+function exactCentipawn(candidate: EngineCandidate | undefined): candidate is EngineCandidate {
+  return Boolean(candidate
+    && candidate.score.kind === 'cp'
+    && candidate.score.bound === null)
+}
+
+/**
+ * Selects only a close second principal variation. Stockfish's `bestmove`
+ * remains authoritative whenever its limited-strength choice differs from PV1,
+ * the score is bounded/mating, the alternative is illegal, or it does not
+ * actually express this opponent's declared preference.
+ */
+export function selectProfileCandidateMove(
+  game: Chess,
+  profile: BotProfile,
+  bestMove: MoveInput,
+  candidates: readonly EngineCandidate[],
+): ProfileCandidateSelection {
+  const baseline = candidates.find((candidate) => candidate.multiPv === 1)
+  const alternative = candidates.find((candidate) => candidate.multiPv === 2)
+  if (!exactCentipawn(baseline) || !exactCentipawn(alternative)) {
+    return { move: bestMove, usedStyle: false }
+  }
+  if (uciForMove(baseline.move) !== uciForMove(bestMove)) {
+    return { move: bestMove, usedStyle: false }
+  }
+
+  const scoreLoss = baseline.score.value - alternative.score.value
+  if (scoreLoss < 0 || scoreLoss > profile.candidatePolicy.maxCpLoss) {
+    return { move: bestMove, usedStyle: false }
+  }
+
+  const baseTraits = moveTraits(game, bestMove)
+  const alternativeTraits = moveTraits(game, alternative.move)
+  if (!baseTraits || !alternativeTraits
+    || styleScore(alternativeTraits, profile.candidatePolicy.preference)
+      <= styleScore(baseTraits, profile.candidatePolicy.preference)) {
+    return { move: bestMove, usedStyle: false }
+  }
+
+  return { move: alternativeTraits.move, usedStyle: true }
+}
+
 /** The phrase is deterministic so an unchanged local game never gains random UI state. */
 export function botOpeningReaction(profile: BotProfile, game: Chess): string {
   return profile.openingReactions[phraseIndex(`${profile.id}:${game.fen()}`, profile.openingReactions.length)]!
+}
+
+export function botStyleReaction(profile: BotProfile): string {
+  return `${profile.name} chose a close ${profile.candidatePolicy.label} line.`
 }
 
 export function botPostGameMessage(profile: BotProfile, result: string, botColor: Color): string {

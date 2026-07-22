@@ -104,9 +104,11 @@ import {
   DEFAULT_BOT_PROFILE_ID,
   botOpeningReaction,
   botPostGameMessage,
+  botStyleReaction,
   botProfileForId,
   isBotProfileId,
   profileForLegacyLevel,
+  selectProfileCandidateMove,
   selectProfileOpeningMove,
   type BotProfileId,
   type BotProfileTone,
@@ -1395,10 +1397,11 @@ export default function App() {
       ? Promise.resolve({
         move: openingMove,
         ponder: null,
+        candidates: [],
         provider: 'opening-cue',
         engineName: 'Local opening cue',
       })
-      : client.search(requestFen, botLevel, engineSettings)
+      : client.search(requestFen, botLevel, engineSettings, botProfile.candidateCount)
 
     void moveRequest.then(async (result) => {
       if (version !== botRequestVersion.current) return
@@ -1414,13 +1417,18 @@ export default function App() {
       }
       if (result.warning) setNotice(`Stockfish unavailable; KnightBot took over. ${result.warning}`)
       if (!result.move) return
+      // A profile can only use a legal, close second PV from this exact one
+      // bounded search. Fallbacks and opening cues retain their own move.
+      const chosen = result.provider === 'stockfish'
+        ? selectProfileCandidateMove(game, botProfile, result.move, result.candidates)
+        : { move: result.move, usedStyle: false }
       await waitForPacing(Math.max(0, BOT_MOVE_DISPLAY_FLOOR_MS[botLevel] - (Date.now() - requestedAt)))
       if (version !== botRequestVersion.current) return
       if (game.fen() !== requestFen) return
       let next = cloneGame(game, startFen)
       try {
         const now = Date.now()
-        next.move(result.move)
+        next.move(chosen.move)
         const beforeBotClock = settleClock(clock, now)
         const afterBotClock = completeClockMove(clock, botColor, now)
         const queuedPremove = premoveRef.current
@@ -1444,6 +1452,8 @@ export default function App() {
         setGame(next); setSelected(null); setPromotion(null)
         if (result.provider === 'opening-cue') {
           setNotice(`${botProfile.name}: ${botOpeningReaction(botProfile, next)}`)
+        } else if (chosen.usedStyle) {
+          setNotice(botStyleReaction(botProfile))
         }
         playMoveSound(next)
       } catch {

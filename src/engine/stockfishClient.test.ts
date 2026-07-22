@@ -79,13 +79,34 @@ describe('StockfishClient', () => {
       threads: 4,
       hashMb: 256,
       depth: 16,
-    })
+    }, 2)
 
     expect(invoke).toHaveBeenCalledWith('stockfish_best_move', {
       request: expect.objectContaining({
         enginePath: '/opt/local/bin/stockfish',
+        candidateCount: 2,
         settings: expect.objectContaining({ profile: 'custom', threads: 4, hashMb: 256, depth: 16 }),
       }),
+    })
+  })
+
+  it('exposes only safe same-search candidate moves while keeping the best move authoritative', async () => {
+    const invoke = vi.fn(async () => response({
+      lines: [
+        { multiPv: 1, depth: 13, score: { kind: 'cp', value: 24, bound: null }, pv: ['e2e4'] },
+        { multiPv: 2, depth: 13, score: { kind: 'cp', value: 8, bound: null }, pv: ['d2d4'] },
+        { multiPv: 3, depth: 13, score: { kind: 'cp', value: 2, bound: null }, pv: ['c2c4'] },
+        { multiPv: 2, depth: 13, score: { kind: 'cp', value: 9, bound: null }, pv: ['e2e9'] },
+      ],
+    }))
+    const client = new StockfishClient(invoke)
+
+    await expect(client.search(fen, 'balanced', DEFAULT_ENGINE_SETTINGS, 2)).resolves.toMatchObject({
+      move: { from: 'e2', to: 'e4' },
+      candidates: [
+        { multiPv: 1, move: { from: 'e2', to: 'e4' }, score: { kind: 'cp', value: 24, bound: null } },
+        { multiPv: 2, move: { from: 'd2', to: 'd4' }, score: { kind: 'cp', value: 8, bound: null } },
+      ],
     })
   })
 

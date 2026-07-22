@@ -163,14 +163,24 @@ function playPreset(level: BotLevel): BrowserSearchOptions {
 export function resolveBrowserPlayOptions(
   level: BotLevel,
   settings: EngineSettings = DEFAULT_ENGINE_SETTINGS,
+  candidateCount?: 1 | 2,
 ): BrowserSearchOptions {
   const normalized = normalizeEngineSettings(settings)
-  if (normalized.profile === 'preset') return playPreset(level)
+  if (normalized.profile === 'preset') {
+    const preset = playPreset(level)
+    return {
+      ...preset,
+      multiPv: candidateCount === undefined ? preset.multiPv : Math.max(preset.multiPv, candidateCount),
+    }
+  }
   return {
     moveTimeMs: normalized.moveTimeMs,
     depth: normalized.depth,
     nodes: normalized.nodes,
-    multiPv: normalized.multiPv,
+    // A named profile asks for at least two lines from the same bounded `go`
+    // request. Respect an explicitly higher custom setting instead of
+    // silently lowering a user-selected analysis budget.
+    multiPv: candidateCount === undefined ? normalized.multiPv : Math.max(normalized.multiPv, candidateCount),
     hashMb: Math.min(normalized.hashMb, MAX_BROWSER_HASH_MB),
     elo: normalized.elo,
     skillLevel: normalized.skillLevel,
@@ -245,8 +255,9 @@ export class BrowserStockfishEngine {
     fen: string,
     level: BotLevel,
     settings: EngineSettings = DEFAULT_ENGINE_SETTINGS,
+    candidateCount?: 1 | 2,
   ): Promise<BrowserSearchResult> {
-    return this.runSearch(fen, resolveBrowserPlayOptions(level, settings))
+    return this.runSearch(fen, resolveBrowserPlayOptions(level, settings, candidateCount))
   }
 
   analyze(
@@ -496,7 +507,9 @@ export class BrowserStockfishEngine {
             nodes = fieldInteger(fields, 'nodes') ?? nodes
             nps = fieldInteger(fields, 'nps') ?? nps
             const analysisLine = parseBrowserAnalysisInfo(line)
-            if (analysisLine && preferAnalysisLine(lines.get(analysisLine.multiPv), analysisLine)) {
+            if (analysisLine
+              && analysisLine.multiPv <= options.multiPv
+              && preferAnalysisLine(lines.get(analysisLine.multiPv), analysisLine)) {
               lines.set(analysisLine.multiPv, analysisLine)
             }
           }

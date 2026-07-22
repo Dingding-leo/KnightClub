@@ -29,6 +29,8 @@ class FakeStockfishWorker implements StockfishWorker {
     } else if (command.startsWith('go ') && this.autoCompleteSearch) {
       queueMicrotask(() => this.emit([
         'info depth 14 seldepth 20 multipv 1 score cp 31 wdl 120 820 60 nodes 250000 nps 600000 hashfull 42 tbhits 0 time 400 pv e2e4 e7e5 g1f3',
+        'info depth 14 seldepth 19 multipv 2 score cp 18 wdl 100 830 70 nodes 250000 nps 600000 hashfull 42 tbhits 0 time 400 pv d2d4 d7d5 c2c4',
+        'info depth 14 seldepth 18 multipv 3 score cp 11 wdl 90 840 70 nodes 250000 nps 600000 hashfull 42 tbhits 0 time 400 pv c2c4 e7e5',
         'bestmove e2e4 ponder e7e5',
       ].join('\n')))
     } else if (command === 'stop') {
@@ -80,6 +82,12 @@ describe('browser Stockfish UCI parsing', () => {
       hashMb: 4096,
       multiPv: 4,
     })).toMatchObject({ hashMb: 128, multiPv: 4 })
+    expect(resolveBrowserPlayOptions('balanced', DEFAULT_ENGINE_SETTINGS, 2)).toMatchObject({
+      moveTimeMs: 160,
+      nodes: 30_000,
+      hashMb: 16,
+      multiPv: 2,
+    })
   })
 })
 
@@ -106,6 +114,26 @@ describe('BrowserStockfishEngine', () => {
 
     engine.dispose()
     expect(worker.terminated).toBe(true)
+  })
+
+  it('requests two play candidates in one equally bounded search', async () => {
+    const worker = new FakeStockfishWorker()
+    const engine = new BrowserStockfishEngine(() => worker)
+
+    await expect(engine.searchMove(fen, 'balanced', DEFAULT_ENGINE_SETTINGS, 2)).resolves.toMatchObject({
+      bestMove: 'e2e4',
+      lines: [
+        { multiPv: 1, pv: ['e2e4', 'e7e5', 'g1f3'] },
+        { multiPv: 2, pv: ['d2d4', 'd7d5', 'c2c4'] },
+      ],
+    })
+    expect(worker.messages).toContain('setoption name Threads value 1')
+    expect(worker.messages).toContain('setoption name MultiPV value 2')
+    expect(worker.messages.filter((message) => message.startsWith('go '))).toEqual([
+      'go movetime 160 nodes 30000',
+    ])
+
+    engine.dispose()
   })
 
   it('reuses acknowledged UCI options while retaining a ready fence between searches', async () => {

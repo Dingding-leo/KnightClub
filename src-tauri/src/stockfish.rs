@@ -110,6 +110,9 @@ pub struct SearchOutcome {
     pub depth: Option<u32>,
     pub nodes: Option<u64>,
     pub nps: Option<u64>,
+    /// Principal variations emitted during this same play search. They are
+    /// advisory UI telemetry; `best_move` remains the authoritative reply.
+    pub lines: Vec<AnalysisInfo>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -365,6 +368,27 @@ pub fn resolve_search_settings(
         depth: requested.depth,
         nodes: requested.nodes,
     })
+}
+
+/// A named local opponent may ask for a second principal variation from the
+/// same bounded play search. This never changes time, nodes, threads or Hash;
+/// it only raises MultiPV when a caller explicitly asks for one or two lines.
+pub fn apply_play_candidate_count(
+    settings: &mut SearchSettings,
+    candidate_count: Option<u8>,
+) -> Result<(), EngineError> {
+    let Some(candidate_count) = candidate_count else {
+        return Ok(());
+    };
+    if !(1..=2).contains(&candidate_count) {
+        return Err(EngineError::InvalidSettings(
+            "Play candidate count must be between 1 and 2".into(),
+        ));
+    }
+    // A custom user setting may already request more lines. Preserve it rather
+    // than silently lowering their chosen engine behavior.
+    settings.multi_pv = settings.multi_pv.max(candidate_count);
+    Ok(())
 }
 
 pub fn uci_option_commands(settings: &SearchSettings) -> Vec<String> {
@@ -788,6 +812,7 @@ impl EngineSupervisor {
         let mut depth = None;
         let mut nodes = None;
         let mut nps = None;
+        let mut lines = BTreeMap::<u8, AnalysisInfo>::new();
         loop {
             if cancelled_through.load(Ordering::Acquire) == request_id {
                 let _ = self.send("stop");
@@ -817,6 +842,20 @@ impl EngineSupervisor {
             };
             if line.starts_with("info ") {
                 parse_info(&line, &mut depth, &mut nodes, &mut nps);
+                // Play must still return its valid bestmove if optional PV
+                // telemetry is malformed or incomplete, so unlike an explicit
+                // analysis job these rows fail closed and are simply ignored.
+                if line.split_whitespace().any(|field| field == "score") {
+                    if let Ok(info) = parse_analysis_info(&line) {
+                        if info.multi_pv <= settings.multi_pv {
+                            let should_replace =
+                                info.score.bound.is_none() || !lines.contains_key(&info.multi_pv);
+                            if should_replace {
+                                lines.insert(info.multi_pv, info);
+                            }
+                        }
+                    }
+                }
             } else if line.starts_with("bestmove ") {
                 let parsed = parse_bestmove(&line)?;
                 return Ok(SearchOutcome {
@@ -826,6 +865,7 @@ impl EngineSupervisor {
                     depth,
                     nodes,
                     nps,
+                    lines: lines.into_values().collect(),
                 });
             }
         }
@@ -1023,6 +1063,8 @@ pub struct BestMoveRequest {
     pub level: String,
     pub engine_path: Option<PathBuf>,
     pub settings: Option<SearchSettingsRequest>,
+    #[serde(default)]
+    pub candidate_count: Option<u8>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1067,6 +1109,7 @@ pub struct BestMoveResponse {
     pub depth: Option<u32>,
     pub nodes: Option<u64>,
     pub nps: Option<u64>,
+    pub lines: Vec<AnalysisInfo>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1146,7 +1189,9 @@ fn stockfish_best_move_blocking(
         return Err(EngineError::Cancelled.to_string());
     }
     let path = discover_for_app(request.engine_path).map_err(|error| error.to_string())?;
-    let settings = resolve_search_settings(&request.level, request.settings)
+    let mut settings = resolve_search_settings(&request.level, request.settings)
+        .map_err(|error| error.to_string())?;
+    apply_play_candidate_count(&mut settings, request.candidate_count)
         .map_err(|error| error.to_string())?;
     let mut guard = state
         .engine
@@ -1195,6 +1240,7 @@ fn stockfish_best_move_blocking(
         depth: outcome.depth,
         nodes: outcome.nodes,
         nps: outcome.nps,
+        lines: outcome.lines,
     })
 }
 

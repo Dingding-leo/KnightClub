@@ -34,7 +34,9 @@ export function BotProfilePicker({ selectedId, customEngine, onSelect }: BotProf
               <span className="bot-profile-card__copy">
                 <strong>{profile.name}</strong>
                 <small>Stockfish target {profile.targetElo}</small>
-                <em>{profile.openingCueLabel}</em>
+                <em title={`${profile.openingCueLabel}; close ${profile.candidatePolicy.label} choices`}>
+                  Close {profile.candidatePolicy.label}
+                </em>
               </span>
             </button>
           )
@@ -42,7 +44,7 @@ export function BotProfilePicker({ selectedId, customEngine, onSelect }: BotProf
       </div>
       <p className="bot-profile-picker__hint" aria-live="polite">
         <strong>{selected.name}:</strong> {selected.intro}
-        {customEngine && ' Custom UCI limits override this opponent’s default strength; the local opening cue remains active.'}
+        {customEngine && ' Custom UCI limits override this opponent’s default strength; its local opening cue and close-line preference remain active.'}
       </p>
     </section>
   )
