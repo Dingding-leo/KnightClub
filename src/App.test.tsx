@@ -39,6 +39,50 @@ describe('bot player-side setup', () => {
     expect(markup).toContain('Nia Cross')
   })
 
+  it('makes the first playable bot move explicit without changing side-neutral states', () => {
+    const freshMarkup = renderApp()
+
+    expect(freshMarkup).toContain('>Your move</span>')
+    expect(freshMarkup).toContain('aria-label="Your move — choose a piece to begin."')
+    expect(freshMarkup).toContain('title="Your move — choose a piece to begin."')
+
+    const blackMarkup = renderApp({
+      pgn: '',
+      startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      mode: 'bot',
+      botLevel: 'balanced',
+      orientation: 'black',
+      humanColor: 'b',
+      colorChoice: 'black',
+    })
+    expect(blackMarkup).toContain('>Rowan Pike is thinking — queue one premove.</span>')
+    expect(blackMarkup).not.toContain('>Your move</span>')
+
+    const hotSeatMarkup = renderApp({
+      pgn: '',
+      startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      mode: 'local',
+      botLevel: 'balanced',
+      orientation: 'white',
+      humanColor: 'w',
+      colorChoice: 'white',
+    })
+    expect(hotSeatMarkup).toContain('>White to move</span>')
+    expect(hotSeatMarkup).not.toContain('>Your move</span>')
+
+    const checkedMarkup = renderApp({
+      pgn: '',
+      startFen: '4r1k1/8/8/8/8/8/8/4K3 w - - 0 1',
+      mode: 'bot',
+      botLevel: 'balanced',
+      orientation: 'white',
+      humanColor: 'w',
+      colorChoice: 'white',
+    })
+    expect(checkedMarkup).toContain('>White to move — check</span>')
+    expect(checkedMarkup).not.toContain('>Your move</span>')
+  })
+
   it('collapses setup for an in-progress game while keeping completion actions visible', () => {
     const markup = renderApp({
       pgn: '1. e4 e5',
@@ -108,6 +152,10 @@ describe('local transfer convenience contracts', () => {
   it('labels PGN and current-position actions explicitly instead of leaving ambiguous copy/export controls', () => {
     const markup = renderApp()
 
+    expect(markup).toContain('aria-label="Game actions"')
+    expect(markup).toContain('>Undo</span>')
+    expect(markup).toContain('>New game</span>')
+    expect(markup).toContain('>Pause</span>')
     expect(markup).toContain('Copy PGN')
     expect(markup).toContain('Download PGN')
     expect(markup).toContain('board-toolbar__game-action')

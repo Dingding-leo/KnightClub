@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   AnalysisWorkspace,
   CoachEvidenceCard,
+  LiveGameContinuationNotice,
   RetryPracticeButton,
   RetrySaveNotice,
   ReviewSaveNotice,
 } from './AnalysisWorkspace'
 import { createPgnTimeline } from '../analysis/analysisModel'
 import { resolvePlayPreviewReviewPly } from '../review/playPreviewReviewTarget'
+import { liveGameContinuation } from '../review/liveGameContinuation'
 import type { CoachGuidance } from '../review/coach'
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { PersistedReview } from '../review/reviewPersistence'
@@ -54,6 +56,23 @@ function retryItem(retryKey: string): RetryItem {
 }
 
 describe('analysis workspace convenience contracts', () => {
+  it('offers a user-initiated update when the live game safely extends Review', () => {
+    const review = createPgnTimeline('1. e4 e5 2. Nf3')
+    const live = createPgnTimeline('1. e4 e5 2. Nf3 Nc6')
+    const continuation = liveGameContinuation(review, live)
+
+    const markup = renderToStaticMarkup(
+      <LiveGameContinuationNotice continuation={continuation} onUpdate={vi.fn()} />,
+    )
+
+    expect(markup).toContain('role="status"')
+    expect(markup).toContain('Live game advanced by 1 move.')
+    expect(markup).toContain('Latest: 2… Nc6.')
+    expect(markup).toContain('Update review')
+    expect(markup).toContain('aria-label="Update review to include 2… Nc6"')
+    expect(renderToStaticMarkup(<LiveGameContinuationNotice continuation={null} onUpdate={vi.fn()} />)).toBe('')
+  })
+
   it('opens an exact Play preview position only when the Review timeline still matches it', () => {
     const beforeReply = createPgnTimeline('1. e4 e5 2. Nf3')
     const timeline = createPgnTimeline('1. e4 e5 2. Nf3 Nc6')
@@ -114,6 +133,9 @@ describe('analysis workspace convenience contracts', () => {
     expect(markup).toContain('<option value="1">1. e4</option>')
     expect(markup).toContain('<option value="2">1… e5</option>')
     expect(markup).toContain('class="analysis-moves" aria-label="Game moves"')
+    expect(markup).toContain('>Start position</button>')
+    expect(markup).toContain('>e4</button>')
+    expect(markup).toContain('>Nc6</button>')
     expect(markup.indexOf('analysis-navigation')).toBeLessThan(markup.indexOf('analysis-mobile-move-picker'))
     expect(markup.indexOf('analysis-mobile-move-picker')).toBeLessThan(markup.indexOf('analysis-transfer'))
     expect(markup).toContain('Review full game')

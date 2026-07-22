@@ -1255,6 +1255,11 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
 .analysis-navigation button:hover:not(:disabled) { color: var(--text); background: var(--surface-raised); }
 .analysis-navigation button:disabled { color: #586056; cursor: not-allowed; }
 .analysis-navigation output { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; font-weight: 750; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.analysis-live-update { margin-top: 10px; padding: 9px 10px; border: 1px solid rgba(89, 195, 245, .24); border-radius: 10px; background: rgba(89, 195, 245, .07); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.analysis-live-update > span { min-width: 0; display: grid; gap: 2px; }
+.analysis-live-update strong { color: #b6def6; font-size: 10px; }
+.analysis-live-update small { color: var(--muted); font-size: 9px; line-height: 1.4; }
+.analysis-live-update button { min-height: 36px; flex: 0 0 auto; padding: 0 9px; font-size: 10px; white-space: nowrap; }
 .analysis-mobile-move-picker { display: none; }
 
 .analysis-import {
@@ -1824,7 +1829,7 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
   .player-bar { min-height: 45px; }
   .board { border-radius: 7px; }
   .piece { width: 97%; height: 97%; }
-  .board-toolbar button { min-height: 38px; gap: 5px; }
+  .board-toolbar button { min-height: 44px; gap: 5px; }
   .game-panel { margin-top: 18px; min-height: 0; border-radius: 14px; }
   .game-panel__moves { min-height: 300px; }
   .content-card,
@@ -1832,6 +1837,11 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
   .analysis-workspace { display: block; }
   .analysis-panel { margin-top: 16px; min-height: 590px; border-radius: 14px; }
   .analysis-board-heading { min-height: 38px; }
+  .analysis-live-update { align-items: stretch; flex-direction: column; }
+  .analysis-live-update button { width: 100%; min-height: 44px; }
+  .analysis-moves > button,
+  .analysis-move-row,
+  .analysis-move-row button { min-height: 44px; }
   .analysis-mobile-move-picker { margin-top: 10px; display: grid; gap: 5px; }
   .analysis-mobile-move-picker > span { color: var(--muted); font-size: 10px; font-weight: 750; }
   .analysis-mobile-move-picker select { min-height: 44px; }

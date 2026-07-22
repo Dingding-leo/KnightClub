@@ -48,6 +48,10 @@ import {
   resolvePlayPreviewReviewPly,
   type PlayPreviewReviewTarget,
 } from '../review/playPreviewReviewTarget'
+import {
+  liveGameContinuation,
+  type LiveGameContinuation,
+} from '../review/liveGameContinuation'
 import { createRetryItem, type RetryItem } from '../review/retry'
 import { saveRetryItemsSerially } from '../review/retryQueuePersistence'
 import {
@@ -146,6 +150,31 @@ export function RetryPracticeButton({
       {active ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlayCircle size={15} aria-hidden="true" />}
       {label}
     </button>
+  )
+}
+
+interface LiveGameContinuationNoticeProps {
+  continuation: LiveGameContinuation | null
+  onUpdate: () => void
+}
+
+/** Keeps an older Review position stable until the player explicitly updates it. */
+export function LiveGameContinuationNotice({ continuation, onUpdate }: LiveGameContinuationNoticeProps) {
+  if (!continuation) return null
+  const latestMove = continuation.latestMove
+  const latestMoveLabel = `${latestMove.moveNumber}${latestMove.color === 'b' ? '…' : '.'} ${latestMove.san}`
+  const addedMoveLabel = continuation.addedPly === 1 ? 'move' : 'moves'
+
+  return (
+    <aside className="analysis-live-update" role="status" aria-live="polite">
+      <span>
+        <strong>Live game advanced by {continuation.addedPly} {addedMoveLabel}.</strong>
+        <small>Latest: {latestMoveLabel}. Update Review when you&apos;re ready.</small>
+      </span>
+      <button className="secondary-button" type="button" onClick={onUpdate} aria-label={`Update review to include ${latestMoveLabel}`}>
+        <RefreshCw size={14} aria-hidden="true" />Update review
+      </button>
+    </aside>
   )
 }
 
@@ -315,6 +344,11 @@ export function AnalysisWorkspace({
 
   const position = timeline.positions[ply] ?? timeline.positions[0]
   const boardGame = useMemo(() => new Chess(position.fen), [position.fen])
+  const liveTimeline = useMemo(() => safeTimeline(currentPgn), [currentPgn])
+  const liveContinuation = useMemo(
+    () => liveGameContinuation(timeline, liveTimeline),
+    [liveTimeline, timeline],
+  )
   const positionTerminal = boardGame.isGameOver()
   const engineThreads = desktop ? threads : 1
   const engineHashMb = desktop ? hashMb : Math.min(hashMb, 128)
@@ -661,6 +695,10 @@ export function AnalysisWorkspace({
   }
 
   const applyTimeline = (next: AnalysisTimeline) => {
+    // Invalidate an older saved-review lookup before the new timeline renders.
+    // The effect below will start its own lookup for `next`; this synchronous
+    // fence prevents a just-resolved old report from flashing in between.
+    reviewLoadVersion.current += 1
     stopFullReview()
     setTimeline(next)
     setPly(next.positions.length - 1)
@@ -840,6 +878,8 @@ export function AnalysisWorkspace({
           <button type="button" aria-label="Next position" disabled={ply === maxPly} onClick={() => setPly((value) => Math.min(maxPly, value + 1))}><ChevronRight size={20} /></button>
           <button type="button" aria-label="Last position" disabled={ply === maxPly} onClick={() => setPly(maxPly)}><ChevronLast size={20} /></button>
         </div>
+
+        <LiveGameContinuationNotice continuation={liveContinuation} onUpdate={loadCurrentGame} />
 
         {timeline.moves.length > 0 && (
           <label className="analysis-mobile-move-picker">

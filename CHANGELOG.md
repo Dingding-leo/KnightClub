@@ -93,6 +93,8 @@
 - Review opens with Quick one-line analysis and waits for any pending bot turn instead of intentionally competing for local CPU.
 - Review's board-adjacent navigator now names the selected SAN move alongside its compact ply count, so a handoff or arrow press has visible context without scrolling to the notation panel.
 - A successful real Stockfish Play result now marks the engine ready with its returned identity/path; local opening cues remain unverified, while KnightBot fallback, malformed identity and non-abort failure paths show an honest error rather than a stale ready state.
+- A fresh, playable bot game now says **Your move** with an accessible first-action cue, while bot-first, hot-seat, check, decision, promotion, paused and preview states retain their higher-priority status.
+- Review now notices only a strict per-ply FEN continuation of the live game and offers an explicit **Update review** action; it never changes the board automatically or lets an old full-game review survive the player-approved update.
 - Production browser builds register the service worker; development and Tauri do not, while desktop startup removes stale PWA caches left by earlier Tauri builds
 - Fresh timed games are armed until the first legal move instead of charging while the player is choosing an opening
 - Replacing an unfinished game through New game, mode, time control, FEN or Library now requires an explicit confirmation and preserves the paused game on cancel
@@ -126,6 +128,7 @@
 - At phone widths, every white/black SAN button in Play's notation list now retains a 44 px target, making historical-preview entry as easy to tap as its replay controls
 - At phone widths, Review now keeps a labelled 44 px **Jump to move** picker directly below board navigation, so players can return to any PGN position without scrolling past analysis output; the full classified notation list remains available in the panel
 - At phone widths, all four Review replay arrows now retain 44 px targets instead of shrinking below touch comfort at the narrowest breakpoint
+- At phone widths through 700 px, every Play game-toolbar action and every complete Review notation target now keeps a 44 px touch target, not only the narrowest phone layout
 - Play notation now supports a non-destructive, read-only historical board preview with clickable SAN moves and an explicit Return to live action; live clocks, the bot, persistence and queued premoves remain authoritative underneath it
 - Historical Play previews now include an explicit Previous/Next replay bar beside Return to live; it stays at the user-selected ply while a bot reply arrives and reaches live only after the newest move
 - Historical Play previews now offer **Review this position**, carrying a one-shot ply/FEN handoff into Review; a bot-appended matching prefix opens at the intended move, while changed content safely falls back to the normal final position
