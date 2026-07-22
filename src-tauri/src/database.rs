@@ -40,6 +40,7 @@ const MAX_TACTICS_ELAPSED_MS: u32 = 3_600_000;
 const MAX_TACTICS_MOVE_COUNT: u32 = 64;
 const MAX_TACTICS_HINT_COUNT: u8 = 3;
 const MAX_TACTICS_TEXT_BYTES: usize = 64;
+const PERSISTED_RECORD_COUNT_SQL: &str = "SELECT (SELECT count(*) FROM app_state) + (SELECT count(*) FROM games) + (SELECT count(*) FROM reviews) + (SELECT count(*) FROM retry_items) + (SELECT count(*) FROM tactics_progress) + (SELECT count(*) FROM tactics_attempts)";
 
 #[derive(Debug)]
 pub enum DatabaseError {
@@ -678,6 +679,20 @@ pub struct DatabaseSnapshot {
     pub recovery_backup_path: Option<String>,
 }
 
+/// Startup data deliberately excludes full game payloads. A library can hold
+/// hundreds of PGNs, so Play only needs this lightweight envelope until a
+/// player actually opens Library or Insights.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBootstrap {
+    pub schema_version: i64,
+    pub active_session: Option<Value>,
+    pub preferences: Option<Value>,
+    pub game_count: u32,
+    pub is_empty: bool,
+    pub recovery_backup_path: Option<String>,
+}
+
 pub struct OpenDatabase {
     pub repository: DatabaseRepository,
     pub recovery_backup: Option<PathBuf>,
@@ -846,10 +861,41 @@ impl DatabaseRepository {
     pub fn snapshot(&self) -> Result<DatabaseSnapshot, DatabaseError> {
         let active_session = self.state_value("active_session")?;
         let preferences = self.state_value("preferences")?;
+        let games = self.list_games()?;
+        Ok(DatabaseSnapshot {
+            schema_version: self.schema_version()?,
+            active_session,
+            preferences,
+            games,
+            recovery_backup_path: None,
+        })
+    }
+
+    /// Returns only the data Play needs to restore a session. Full PGN payloads
+    /// stay in SQLite until Library or Insights requests them explicitly.
+    pub fn bootstrap(&self) -> Result<DatabaseBootstrap, DatabaseError> {
+        let active_session = self.state_value("active_session")?;
+        let preferences = self.state_value("preferences")?;
+        let game_count = self.game_count()?;
+        let persisted_records: i64 =
+            self.connection
+                .query_row(PERSISTED_RECORD_COUNT_SQL, [], |row| row.get(0))?;
+        Ok(DatabaseBootstrap {
+            schema_version: self.schema_version()?,
+            active_session,
+            preferences,
+            game_count,
+            is_empty: persisted_records == 0,
+            recovery_backup_path: None,
+        })
+    }
+
+    /// Decodes the bounded game library only for library-facing workspaces.
+    pub fn list_games(&self) -> Result<Vec<Value>, DatabaseError> {
         let mut statement = self.connection.prepare(
             "SELECT reviewed, payload_json FROM games ORDER BY played_at DESC, id DESC LIMIT 500",
         )?;
-        let games = statement
+        statement
             .query_map([], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })?
@@ -867,14 +913,16 @@ impl DatabaseRepository {
                 }
                 Ok(record.payload)
             })
-            .collect::<Result<Vec<_>, DatabaseError>>()?;
-        Ok(DatabaseSnapshot {
-            schema_version: self.schema_version()?,
-            active_session,
-            preferences,
-            games,
-            recovery_backup_path: None,
-        })
+            .collect::<Result<Vec<_>, DatabaseError>>()
+    }
+
+    fn game_count(&self) -> Result<u32, DatabaseError> {
+        let count: i64 = self.connection.query_row(
+            "SELECT count(*) FROM (SELECT 1 FROM games LIMIT ?1)",
+            [MAX_GAMES as i64],
+            |row| row.get(0),
+        )?;
+        Ok(count as u32)
     }
 
     fn state_value(&self, key: &str) -> Result<Option<Value>, DatabaseError> {
@@ -909,11 +957,7 @@ impl DatabaseRepository {
             game.validate()?;
         }
         let transaction = self.connection.transaction()?;
-        let count: i64 = transaction.query_row(
-            "SELECT (SELECT count(*) FROM app_state) + (SELECT count(*) FROM games) + (SELECT count(*) FROM reviews) + (SELECT count(*) FROM retry_items) + (SELECT count(*) FROM tactics_progress) + (SELECT count(*) FROM tactics_attempts)",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = transaction.query_row(PERSISTED_RECORD_COUNT_SQL, [], |row| row.get(0))?;
         if count != 0 {
             return Ok(false);
         }
@@ -1905,6 +1949,24 @@ pub fn database_snapshot(state: State<'_, DatabaseState>) -> Result<DatabaseSnap
         .map_err(|error| error.to_string())?;
     snapshot.recovery_backup_path = state.recovery_backup_path.clone();
     Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn database_bootstrap(state: State<'_, DatabaseState>) -> Result<DatabaseBootstrap, String> {
+    let mut bootstrap = state
+        .lock()?
+        .bootstrap()
+        .map_err(|error| error.to_string())?;
+    bootstrap.recovery_backup_path = state.recovery_backup_path.clone();
+    Ok(bootstrap)
+}
+
+#[tauri::command]
+pub fn database_list_games(state: State<'_, DatabaseState>) -> Result<Vec<Value>, String> {
+    state
+        .lock()?
+        .list_games()
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

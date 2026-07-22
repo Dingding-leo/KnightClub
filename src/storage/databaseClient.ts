@@ -44,6 +44,16 @@ export interface DatabaseSnapshot {
   recoveryBackupPath: string | null
 }
 
+/** The desktop startup envelope intentionally excludes full PGN game payloads. */
+export interface DatabaseBootstrap {
+  schemaVersion: number
+  activeSession: ActiveSession | null
+  preferences: Preferences | null
+  gameCount: number
+  isEmpty: boolean
+  recoveryBackupPath: string | null
+}
+
 export interface LegacyDatabaseImport {
   activeSession: ActiveSession | null
   preferences: Preferences | null
@@ -112,6 +122,32 @@ function parseSnapshot(value: unknown): DatabaseSnapshot {
   return value as unknown as DatabaseSnapshot
 }
 
+function parseBootstrap(value: unknown): DatabaseBootstrap {
+  if (!isObject(value)
+    || value.schemaVersion !== CURRENT_SCHEMA_VERSION
+    || !(value.activeSession === null || isActiveSession(value.activeSession))
+    || !(value.preferences === null || isObject(value.preferences))
+    || !Number.isInteger(value.gameCount)
+    || Number(value.gameCount) < 0
+    || Number(value.gameCount) > MAX_GAMES
+    || typeof value.isEmpty !== 'boolean'
+    || !(value.recoveryBackupPath === null || typeof value.recoveryBackupPath === 'string')
+    || (value.isEmpty && (value.activeSession !== null || value.preferences !== null || value.gameCount !== 0))) {
+    throw new Error('KnightClub received an invalid database bootstrap.')
+  }
+  return value as unknown as DatabaseBootstrap
+}
+
+function parseGames(value: unknown): StoredGame[] {
+  if (!Array.isArray(value) || value.length > MAX_GAMES) {
+    throw new Error('KnightClub received an invalid game library.')
+  }
+  value.forEach(assertGame)
+  const ids = new Set(value.map((game) => game.id))
+  if (ids.size !== value.length) throw new Error('KnightClub received duplicate saved games.')
+  return value as StoredGame[]
+}
+
 export class DatabaseClient {
   private readonly invoke: Invoke
   private writeQueue: Promise<void> = Promise.resolve()
@@ -128,6 +164,15 @@ export class DatabaseClient {
 
   async snapshot(): Promise<DatabaseSnapshot> {
     return parseSnapshot(await this.invoke('database_snapshot'))
+  }
+
+  async bootstrap(): Promise<DatabaseBootstrap> {
+    return parseBootstrap(await this.invoke('database_bootstrap'))
+  }
+
+  /** A read barrier keeps a newly saved game ahead of its later library fetch. */
+  async listGames(): Promise<StoredGame[]> {
+    return this.enqueueRaw(() => this.invoke('database_list_games').then(parseGames))
   }
 
   private enqueueRaw<T>(operation: () => Promise<T>): Promise<T> {

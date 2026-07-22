@@ -33,6 +33,8 @@ pub fn run() {
         .manage(stockfish::AnalysisState::default())
         .invoke_handler(tauri::generate_handler![
             database::database_snapshot,
+            database::database_bootstrap,
+            database::database_list_games,
             database::database_import_legacy,
             database::database_save_active_session,
             database::database_save_preferences,

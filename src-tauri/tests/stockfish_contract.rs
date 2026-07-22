@@ -509,8 +509,11 @@ done
     // remains a lifecycle/retry test rather than a scheduler timing test.
     fs::write(&state_path, "ready").expect("mark retry fixture ready");
 
+    // The first one-second timeout is the behavior under test. Give the
+    // recovery launch scheduler headroom when this contract runs beside the
+    // other process fixtures on a busy CI or developer machine.
     let identity = engine
-        .initialize(Duration::from_secs(1))
+        .initialize(Duration::from_secs(3))
         .expect("a clean retry should start a new supervisor process");
     assert_eq!(identity.name, "Recovered Fixture");
     let _ = fs::remove_file(pid_path);

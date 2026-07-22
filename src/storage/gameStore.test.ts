@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeActiveSession, normalizeLibrary } from './gameStore'
+import { mergeLibraryGames, normalizeActiveSession, normalizeLibrary } from './gameStore'
 
 const validGame = {
   id: 'game-1',
@@ -55,6 +55,23 @@ describe('game library normalization', () => {
       validGame,
       { ...validGame, id: 'unknown-profile', botProfileId: 'champion' },
     ])).toEqual([validGame])
+  })
+
+  it('keeps newer in-memory saves and review flags when a delayed native list arrives', () => {
+    const native = [
+      { ...validGame, id: 'game-1', reviewed: false },
+      { ...validGame, id: 'game-older', playedAt: '2026-07-20T00:00:00.000Z' },
+    ]
+    const current = [
+      { ...validGame, id: 'game-1', reviewed: true, reviewKey: '0123456789abcdef' },
+      { ...validGame, id: 'game-new', playedAt: '2026-07-23T00:00:00.000Z' },
+    ]
+
+    expect(mergeLibraryGames(native, current)).toEqual([
+      current[1],
+      current[0],
+      native[1],
+    ])
   })
 })
 

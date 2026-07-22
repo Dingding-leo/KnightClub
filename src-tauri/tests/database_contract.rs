@@ -120,14 +120,21 @@ fn round_trips_state_and_keeps_legacy_import_atomic_and_idempotent() {
 
     assert!(repository.import_legacy(&legacy).unwrap());
     assert!(!repository.import_legacy(&legacy).unwrap());
+    let bootstrap = repository.bootstrap().unwrap();
+    assert_eq!(bootstrap.active_session, legacy.active_session);
+    assert_eq!(bootstrap.preferences, legacy.preferences);
+    assert_eq!(bootstrap.game_count, 1);
+    assert!(!bootstrap.is_empty);
     let snapshot = repository.snapshot().unwrap();
     assert_eq!(snapshot.active_session, legacy.active_session);
     assert_eq!(snapshot.preferences, legacy.preferences);
     assert_eq!(snapshot.games.len(), 1);
     assert_eq!(snapshot.games[0]["botProfileId"], "rowan-pike");
+    assert_eq!(repository.list_games().unwrap(), snapshot.games);
 
     repository.clear_active_session().unwrap();
     repository.clear_games().unwrap();
+    assert_eq!(repository.bootstrap().unwrap().game_count, 0);
     let cleared = repository.snapshot().unwrap();
     assert!(cleared.active_session.is_none());
     assert!(cleared.games.is_empty());
@@ -149,6 +156,73 @@ fn rejects_oversized_payloads_without_partial_import() {
     assert!(snapshot.active_session.is_none());
     assert!(snapshot.preferences.is_none());
     assert!(snapshot.games.is_empty());
+}
+
+#[test]
+fn bootstrap_defers_game_payload_decoding_until_the_library_is_opened() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("lazy-library.sqlite3");
+    {
+        let opened = DatabaseRepository::open(&path).unwrap();
+        let mut repository = opened.repository;
+        assert!(
+            repository
+                .import_legacy(&LegacyImport {
+                    active_session: None,
+                    preferences: None,
+                    games: vec![game("game-1")],
+                })
+                .unwrap()
+        );
+    }
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE games SET reviewed = 1, payload_json = '{\"id\": \"game-1\"}'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let opened = DatabaseRepository::open(&path).unwrap();
+    let repository = opened.repository;
+    let bootstrap = repository.bootstrap().unwrap();
+    assert_eq!(bootstrap.game_count, 1);
+    assert!(!bootstrap.is_empty);
+    assert!(repository.list_games().is_err());
+}
+
+#[test]
+fn bootstrap_treats_review_only_storage_as_nonempty_for_legacy_import() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("review-only.sqlite3");
+    {
+        let opened = DatabaseRepository::open(&path).unwrap();
+        drop(opened.repository);
+    }
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO reviews(review_key, source_pgn, start_fen, move_count, reviewed_at, payload_json) \
+             VALUES('0123456789abcdef', '1. e4 *', 'fen', 1, '2026-07-22T00:00:00.000Z', '{}');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let opened = DatabaseRepository::open(&path).unwrap();
+    let mut repository = opened.repository;
+    assert!(!repository.bootstrap().unwrap().is_empty);
+    assert!(
+        !repository
+            .import_legacy(&LegacyImport {
+                active_session: None,
+                preferences: None,
+                games: vec![game("must-not-import")],
+            })
+            .unwrap()
+    );
+    assert!(repository.list_games().unwrap().is_empty());
 }
 
 #[test]

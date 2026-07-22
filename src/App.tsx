@@ -120,6 +120,7 @@ import {
   loadActiveSession,
   loadLibrary,
   loadPreferences,
+  mergeLibraryGames,
   normalizePreferences,
   saveActiveSession,
   saveGame,
@@ -155,6 +156,7 @@ import {
 type Tab = 'play' | 'review' | 'train' | 'library' | 'insights'
 type Promotion = { from: Square; to: Square; choices: PieceSymbol[]; kind: 'move' | 'premove' }
 type DatabaseStatus = { kind: 'browser' | 'migrating' | 'ready' | 'recovered' | 'error'; message: string }
+type LibraryLoadState = 'idle' | 'loading' | 'ready' | 'error'
 
 const navItems: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
   { id: 'play', label: 'Play', icon: Gamepad2 },
@@ -412,7 +414,11 @@ export default function App() {
   const [notice, setNotice] = useState('')
   const [transferNotice, setTransferNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null)
   const [fen, setFen] = useState('')
-  const [library, setLibrary] = useState<StoredGame[]>(loadLibrary)
+  // SQLite is authoritative on desktop, but a complete library can contain
+  // hundreds of PGNs. Do not synchronously parse its browser mirror on Play's
+  // first render; it is imported only when a truly empty database needs it.
+  const [library, setLibrary] = useState<StoredGame[]>(() => desktop ? [] : loadLibrary())
+  const [libraryLoadState, setLibraryLoadState] = useState<LibraryLoadState>(() => desktop ? 'idle' : 'ready')
   const [libraryQuery, setLibraryQuery] = useState('')
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'reviewed' | 'unreviewed'>('all')
   const [showAbortedGames, setShowAbortedGames] = useState(false)
@@ -436,6 +442,8 @@ export default function App() {
   const retryItemsRef = useRef(retryItems)
   const tacticsStateRef = useRef(tacticsState)
   const tacticsWriteQueue = useRef<Promise<void>>(Promise.resolve())
+  const libraryRequestVersion = useRef(0)
+  const pendingNativeGameSaves = useRef<StoredGame[]>([])
   const soundsEnabledRef = useRef(soundsEnabled)
   const captureClockNow = useCallback((nowMs: number) => {
     clockNowRef.current = nowMs
@@ -563,6 +571,31 @@ export default function App() {
     })
   }, [])
 
+  const loadDesktopLibrary = useCallback(() => {
+    if (!database || !databaseReady || libraryLoadState !== 'idle') return
+    const requestVersion = ++libraryRequestVersion.current
+    setLibraryLoadState('loading')
+    void database.listGames().then((nativeGames) => {
+      if (requestVersion !== libraryRequestVersion.current) return
+      // The request can begin before a finished game or review update reaches
+      // SQLite. Current React state wins for the same ID so old list data
+      // never erases that newer local interaction.
+      setLibrary((current) => mergeLibraryGames(nativeGames, current))
+      setLibraryLoadState('ready')
+      setDatabaseStatus((current) => current.kind === 'error'
+        ? { kind: 'ready', message: 'Saved privately in KnightClub on this device.' }
+        : current)
+    }).catch((error: unknown) => {
+      if (requestVersion !== libraryRequestVersion.current) return
+      setLibraryLoadState('error')
+      reportDatabaseError(error)
+    })
+  }, [database, databaseReady, libraryLoadState, reportDatabaseError])
+
+  const retryDesktopLibraryLoad = useCallback(() => {
+    if (libraryLoadState === 'error') setLibraryLoadState('idle')
+  }, [libraryLoadState])
+
   const reviewStore = useMemo(() => ({
     load: async (reviewKey: string) => {
       if (desktop && database && databaseReady) return database.loadReview(reviewKey)
@@ -685,8 +718,12 @@ export default function App() {
       : item)
     setLibrary(next)
     for (const item of changed) {
-      updateGame(item)
-      if (database && databaseReady) void database.saveGame(item).catch(reportDatabaseError)
+      if (database) {
+        if (databaseReady) void database.saveGame(item).catch(reportDatabaseError)
+        else pendingNativeGameSaves.current = mergeLibraryGames(pendingNativeGameSaves.current, [item])
+      } else {
+        updateGame(item)
+      }
     }
   }, [database, databaseReady, library, reportDatabaseError])
 
@@ -696,8 +733,11 @@ export default function App() {
   }
 
   const clearPersistedLibrary = () => {
+    // A response that began before Clear must never restore deleted rows.
+    libraryRequestVersion.current += 1
     clearLibrary()
     setLibrary([])
+    setLibraryLoadState('ready')
     if (database && databaseReady) void database.clearGames().catch(reportDatabaseError)
   }
 
@@ -1242,22 +1282,16 @@ export default function App() {
     void (async () => {
       try {
         setDatabaseStatus({ kind: 'migrating', message: 'Preparing your private game database…' })
-        let snapshot = await database.snapshot()
+        let bootstrap = await database.bootstrap()
         let nativeRetries = await database.listRetryItems()
         let nativeTactics = await database.listTacticsState()
-        const databaseIsEmpty = snapshot.activeSession === null
-          && snapshot.preferences === null
-          && snapshot.games.length === 0
-          && nativeRetries.length === 0
-          && nativeTactics.progress.length === 0
-          && nativeTactics.attempts.length === 0
-        if (databaseIsEmpty) {
+        if (bootstrap.isEmpty) {
           await database.importLegacy({
             activeSession: loadActiveSession(),
             preferences: loadPreferences(),
             games: loadLibrary(),
           })
-          snapshot = await database.snapshot()
+          bootstrap = await database.bootstrap()
           nativeRetries = await database.listRetryItems()
           nativeTactics = await database.listTacticsState()
         }
@@ -1274,8 +1308,8 @@ export default function App() {
         nativeTactics = await database.mergeTacticsState(mergedTactics)
         saveBrowserTacticsState(nativeTactics)
         if (cancelled) return
-        const preferences = normalizePreferences(snapshot.preferences)
-        const restored = restoreSession(snapshot.activeSession, preferences.botProfileId)
+        const preferences = normalizePreferences(bootstrap.preferences)
+        const restored = restoreSession(bootstrap.activeSession, preferences.botProfileId)
         botRequestVersion.current += 1
         botClient.current?.cancel()
         clearPremove()
@@ -1289,10 +1323,10 @@ export default function App() {
         setupAutoCollapsed.current = restored.game.history().length > 0
         setSetupOpen(!setupAutoCollapsed.current)
         setSoundsEnabled(preferences.soundsEnabled); setEngineSettings(preferences.engine)
-        setLibrary(snapshot.games)
-        // A Review action can save to browser storage while desktop hydration
-        // is still running. Merge current React state as well as the initial
-        // storage read so that a newly queued exercise never blinks away.
+        setLibraryLoadState(bootstrap.gameCount === 0 ? 'ready' : 'idle')
+        // Retry work can be saved in browser storage while desktop hydration
+        // is still running. Merge current React state as well as that mirror
+        // so a newly queued exercise never blinks away.
         setRetryItems((current) => mergeRetryItems([...retriesByKey.values()], current))
         tacticsStateRef.current = nativeTactics
         setTacticsState(nativeTactics)
@@ -1301,16 +1335,27 @@ export default function App() {
           restored.termination?.result ?? gameResult(restored.game),
           restored.game.isGameOver() || Boolean(restored.termination),
         )
+        const queuedGameSaves = pendingNativeGameSaves.current
+        pendingNativeGameSaves.current = []
         setDatabaseReady(true)
-        setDatabaseStatus(snapshot.recoveryBackupPath
-          ? { kind: 'recovered', message: `A damaged database was preserved at ${snapshot.recoveryBackupPath}. A clean library is ready.` }
+        for (const item of queuedGameSaves) void database.saveGame(item).catch(reportDatabaseError)
+        setDatabaseStatus(bootstrap.recoveryBackupPath
+          ? { kind: 'recovered', message: `A damaged database was preserved at ${bootstrap.recoveryBackupPath}. A clean library is ready.` }
           : { kind: 'ready', message: 'Saved privately in KnightClub on this device.' })
       } catch (error) {
-        if (!cancelled) reportDatabaseError(error)
+        if (!cancelled) {
+          setLibraryLoadState('error')
+          reportDatabaseError(error)
+        }
       }
     })()
     return () => { cancelled = true }
   }, [database, reportDatabaseError])
+
+  useEffect(() => {
+    if (tab !== 'library' && tab !== 'insights') return
+    loadDesktopLibrary()
+  }, [tab, loadDesktopLibrary])
 
   useEffect(() => {
     const session = {
@@ -1370,8 +1415,13 @@ export default function App() {
       termination: termination ?? undefined,
       ...(mode === 'bot' ? { humanColor, colorChoice } : {}),
     }
-    setLibrary(saveGame(item))
-    if (database && databaseReady) void database.saveGame(item).catch(reportDatabaseError)
+    if (database) {
+      setLibrary((current) => mergeLibraryGames(current, [item]))
+      if (databaseReady) void database.saveGame(item).catch(reportDatabaseError)
+      else pendingNativeGameSaves.current = mergeLibraryGames(pendingNativeGameSaves.current, [item])
+    } else {
+      setLibrary(saveGame(item))
+    }
     savedPosition.current = terminalFingerprint
   }, [game, mode, botLevel, botProfileId, humanColor, colorChoice, gameFinished, currentResult, sharePgn, history.length, timeControl, clock, termination, database, databaseReady, reportDatabaseError])
 
@@ -1862,9 +1912,16 @@ export default function App() {
           <section className="content-card content-card--wide">
             <div className="card-heading">
               <div><span className="eyebrow">On-device library</span><h2>Saved games</h2><p className={`database-status database-status--${databaseStatus.kind}`} role="status">{databaseStatus.message}</p></div>
-              <button className="danger-button" type="button" disabled={!library.length} onClick={clearPersistedLibrary}>Clear library</button>
+              <button className="danger-button" type="button" disabled={libraryLoadState !== 'ready' || !library.length} onClick={clearPersistedLibrary}>Clear library</button>
             </div>
-            {library.length ? <>
+            {desktop && libraryLoadState !== 'ready' ? (
+              <div className="empty-panel" aria-busy={libraryLoadState !== 'error'} role={libraryLoadState === 'error' ? 'alert' : 'status'}>
+                {libraryLoadState === 'error' ? <Library size={30} /> : <RefreshCw className="spin" size={30} aria-hidden="true" />}
+                <strong>{libraryLoadState === 'error' ? 'Couldn’t load saved games' : 'Loading saved games'}</strong>
+                <span>{libraryLoadState === 'error' ? databaseStatus.message : 'Your board stays available while KnightClub opens this private library.'}</span>
+                {libraryLoadState === 'error' && <button className="secondary-button" type="button" onClick={databaseReady ? retryDesktopLibraryLoad : () => window.location.reload()}>{databaseReady ? 'Try again' : 'Reload KnightClub'}</button>}
+              </div>
+            ) : library.length ? <>
               <div className="library-tools" role="search">
                 <label className="library-search" htmlFor="library-search"><Search size={16} /><span className="sr-only">Search saved games</span><input id="library-search" value={libraryQuery} onChange={(event) => setLibraryQuery(event.target.value)} placeholder="Search opponent, result or time…" /></label>
                 <div className="library-filters" aria-label="Review filter">
@@ -1895,15 +1952,26 @@ export default function App() {
         )}
 
         {tab === 'insights' && (
-          <WorkspaceLoadBoundary label="Insights">
-            <Suspense fallback={<WorkspaceLoading label="Insights" />}>
-              <InsightsDashboard
-                games={library}
-                onPlay={() => navigateTo('play')}
-                onReviewGame={(item) => openStored(item, 'review')}
-              />
-            </Suspense>
-          </WorkspaceLoadBoundary>
+          desktop && libraryLoadState !== 'ready' ? (
+            <section className="content-card content-card--wide">
+              <div className="empty-panel" aria-busy={libraryLoadState !== 'error'} role={libraryLoadState === 'error' ? 'alert' : 'status'}>
+                {libraryLoadState === 'error' ? <BarChart3 size={30} /> : <RefreshCw className="spin" size={30} aria-hidden="true" />}
+                <strong>{libraryLoadState === 'error' ? 'Couldn’t load insights' : 'Loading your local insights'}</strong>
+                <span>{libraryLoadState === 'error' ? databaseStatus.message : 'KnightClub is opening your private game history on demand.'}</span>
+                {libraryLoadState === 'error' && <button className="secondary-button" type="button" onClick={databaseReady ? retryDesktopLibraryLoad : () => window.location.reload()}>{databaseReady ? 'Try again' : 'Reload KnightClub'}</button>}
+              </div>
+            </section>
+          ) : (
+            <WorkspaceLoadBoundary label="Insights">
+              <Suspense fallback={<WorkspaceLoading label="Insights" />}>
+                <InsightsDashboard
+                  games={library}
+                  onPlay={() => navigateTo('play')}
+                  onReviewGame={(item) => openStored(item, 'review')}
+                />
+              </Suspense>
+            </WorkspaceLoadBoundary>
+          )
         )}
       </main>
 

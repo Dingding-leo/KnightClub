@@ -75,7 +75,7 @@
 
 ## Phase 5 — Product polish
 
-- [x] On-demand engine startup, non-Play workspace code splitting/prefetch, progressive in-game setup disclosure, single-thread/node-bounded play presets, isolated live-clock repainting, memoized board-square and review-progress interaction, shared Play history/PGN snapshots, coalesced active-session persistence, cached acknowledged UCI options and bot-over-review engine priority
+- [x] On-demand engine startup, non-Play workspace code splitting/prefetch, progressive in-game setup disclosure, single-thread/node-bounded play presets, isolated live-clock repainting, memoized board-square and review-progress interaction, shared Play history/PGN snapshots, lazy desktop library hydration, coalesced active-session persistence, cached acknowledged UCI options and bot-over-review engine priority
 - [ ] Keyboard-complete navigation and screen-reader audit
 - [ ] Multiple original board/piece themes and optional sounds
 - [ ] Chess960 and selected offline variants

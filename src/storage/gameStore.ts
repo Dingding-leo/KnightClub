@@ -133,6 +133,23 @@ export function normalizeLibrary(value: unknown): StoredGame[] {
   return value.filter(isStoredGame).slice(0, MAX_GAMES)
 }
 
+/**
+ * Merges a delayed native library response with the current in-memory list.
+ * The latter wins for matching IDs so a just-saved game or review flag cannot
+ * be erased by a request that started before its SQLite write completed.
+ */
+export function mergeLibraryGames(
+  nativeGames: readonly StoredGame[],
+  currentGames: readonly StoredGame[],
+): StoredGame[] {
+  const byId = new Map<string, StoredGame>()
+  for (const game of nativeGames) byId.set(game.id, game)
+  for (const game of currentGames) byId.set(game.id, game)
+  return [...byId.values()]
+    .sort((left, right) => right.playedAt.localeCompare(left.playedAt) || right.id.localeCompare(left.id))
+    .slice(0, MAX_GAMES)
+}
+
 function safeParse<T>(value: string | null, fallback: T): T {
   if (!value) return fallback
   try {

@@ -107,6 +107,8 @@
 - Completed games lock Undo and reopen from the Library with their exact non-board ending
 - Timed rerenders memoize history and PGN generation instead of rebuilding them every clock tick
 - A Play position now reuses one verbose history snapshot for notation and legal clone replay, and reuses its memoized current PGN for sharing and session persistence instead of rebuilding both during long moves
+- Desktop startup now fetches only session, preferences and a bounded game count; full PGN records are validated and decoded only after Library or Insights opens, with loading/error feedback instead of a misleading empty state
+- Delayed desktop library results merge under newer in-memory game/review changes, while Clear invalidates pre-existing list requests so deleted games cannot reappear
 - Game completion, engine cancellation and board locking now include timeout results
 - The clock display derives elapsed time in memory without writing local storage every tick
 - Responsive board sizing again respects viewport height in one-column layouts
@@ -119,6 +121,7 @@
 
 ### Verification
 
+- Desktop lazy-library pass: lint, typecheck, the 49-file / 236-test frontend suite, full 36-test Rust suite, production web build, local HTTP check and macOS `KnightClub.app` bundle passed. Native contracts prove bootstrap succeeds without decoding a corrupt stored game while the on-demand list fails closed, and that review-only storage blocks legacy import. Client contracts prove malformed lazy responses are rejected and list/read/clear work remains FIFO; a manual packaged-desktop large-library walkthrough remains release handoff work.
 - Play long-history cache pass: lint, typecheck, the 49-file / 233-test frontend suite, full 34-test Rust suite, production web build, local HTTP check and macOS `KnightClub.app` bundle passed. The clone equivalence contract proves an injected verbose history snapshot preserves FEN, SAN history and PGN; a manual long-game Play walkthrough remains release handoff work.
 - Progressive Play setup pass: lint, typecheck, the 49-file / 231-test frontend suite, full 32-test Rust suite, production web build, local HTTP check and macOS `KnightClub.app` bundle passed. SSR contracts cover fresh/open and restored/in-progress/collapsed setup plus persistent completion actions; first-ply/mobile interaction remains release handoff work.
 - Review/persistence performance pass: lint, typecheck, the 49-file / 230-test frontend suite, full 32-test Rust suite, production web build, local HTTP check and macOS `KnightClub.app` bundle passed. Deferred persistence contracts cover latest-snapshot coalescing, no active-write overlap, failure settlement, invalid-payload isolation and clear/FIFO barriers; the manual long-PGN Review responsiveness check remains release handoff work.

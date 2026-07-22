@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DatabaseClient, type DatabaseSnapshot } from './databaseClient'
+import { DatabaseClient, type DatabaseBootstrap, type DatabaseSnapshot } from './databaseClient'
 import { DEFAULT_PREFERENCES, type ActiveSession, type StoredGame } from './gameStore'
 import { createPersistedReview } from '../review/reviewPersistence'
 import { createPgnTimeline } from '../analysis/analysisModel'
@@ -27,6 +27,15 @@ const snapshot: DatabaseSnapshot = {
     finalFen: 'fen',
     moveCount: 2,
   }],
+  recoveryBackupPath: null,
+}
+
+const bootstrap: DatabaseBootstrap = {
+  schemaVersion: 5,
+  activeSession: snapshot.activeSession,
+  preferences: snapshot.preferences,
+  gameCount: snapshot.games.length,
+  isEmpty: false,
   recoveryBackupPath: null,
 }
 
@@ -107,6 +116,8 @@ describe('DatabaseClient', () => {
   it('uses task-specific commands and camelCase payloads', async () => {
     const invoke = vi.fn(async (command: string) => {
       if (command === 'database_snapshot') return snapshot
+      if (command === 'database_bootstrap') return bootstrap
+      if (command === 'database_list_games') return snapshot.games
       if (command === 'database_load_review') return review
       if (command === 'database_load_retry_item') return retry
       if (command === 'database_list_retry_items') return [retry]
@@ -118,6 +129,8 @@ describe('DatabaseClient', () => {
     const client = new DatabaseClient(invoke)
 
     await expect(client.snapshot()).resolves.toEqual(snapshot)
+    await expect(client.bootstrap()).resolves.toEqual(bootstrap)
+    await expect(client.listGames()).resolves.toEqual(snapshot.games)
     await client.importLegacy({ activeSession: null, preferences: snapshot.preferences, games: snapshot.games })
     await client.saveActiveSession(snapshot.activeSession!)
     await client.savePreferences(snapshot.preferences!)
@@ -136,6 +149,8 @@ describe('DatabaseClient', () => {
 
     expect(invoke.mock.calls).toEqual([
       ['database_snapshot'],
+      ['database_bootstrap'],
+      ['database_list_games'],
       ['database_import_legacy', { legacy: { activeSession: null, preferences: snapshot.preferences, games: snapshot.games } }],
       ['database_save_active_session', { activeSession: snapshot.activeSession }],
       ['database_save_preferences', { preferences: snapshot.preferences }],
@@ -327,12 +342,51 @@ describe('DatabaseClient', () => {
     ])
   })
 
+  it('keeps a lazy game list behind earlier writes and ahead of a later clear', async () => {
+    const pendingSave = createDeferred<void>()
+    const invoke = vi.fn((command: string) => {
+      if (command === 'database_save_game') return pendingSave.promise
+      if (command === 'database_list_games') return Promise.resolve(snapshot.games)
+      return Promise.resolve(undefined)
+    })
+    const client = new DatabaseClient(invoke)
+
+    const save = client.saveGame(snapshot.games[0])
+    await flushQueuedWork()
+    const list = client.listGames()
+    const clear = client.clearGames()
+
+    expect(invoke.mock.calls).toEqual([
+      ['database_save_game', { game: snapshot.games[0] }],
+    ])
+
+    pendingSave.resolve()
+    await Promise.all([save, list, clear])
+
+    expect(invoke.mock.calls).toEqual([
+      ['database_save_game', { game: snapshot.games[0] }],
+      ['database_list_games'],
+      ['database_clear_games'],
+    ])
+  })
+
   it('rejects malformed native snapshots before they reach React state', async () => {
     const invalid = new DatabaseClient(vi.fn(async () => ({ ...snapshot, schemaVersion: 0 })))
     await expect(invalid.snapshot()).rejects.toThrow('invalid database snapshot')
 
     const oversized = new DatabaseClient(vi.fn(async () => ({ ...snapshot, games: new Array(501).fill(snapshot.games[0]) })))
     await expect(oversized.snapshot()).rejects.toThrow('invalid database snapshot')
+  })
+
+  it('rejects malformed desktop bootstrap and lazy game-list payloads before they reach React state', async () => {
+    const malformedBootstrap = new DatabaseClient(vi.fn(async () => ({ ...bootstrap, gameCount: 501 })))
+    await expect(malformedBootstrap.bootstrap()).rejects.toThrow('invalid database bootstrap')
+
+    const malformedGames = new DatabaseClient(vi.fn(async () => [{ ...snapshot.games[0], id: '' }]))
+    await expect(malformedGames.listGames()).rejects.toThrow('Saved game is invalid')
+
+    const duplicateGames = new DatabaseClient(vi.fn(async () => [snapshot.games[0], snapshot.games[0]]))
+    await expect(duplicateGames.listGames()).rejects.toThrow('duplicate saved games')
   })
 
   it('preserves valid player-side data and rejects malformed values from native storage', async () => {
