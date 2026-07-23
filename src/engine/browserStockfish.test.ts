@@ -75,7 +75,7 @@ describe('browser Stockfish UCI parsing', () => {
 
   it('matches desktop strength profiles while capping browser memory', () => {
     expect(resolveBrowserPlayOptions('easy')).toMatchObject({ elo: 1320, skillLevel: 2, moveTimeMs: 50, nodes: 1_000, hashMb: 16 })
-    expect(resolveBrowserPlayOptions('strong')).toMatchObject({ elo: 2200, skillLevel: 14, moveTimeMs: 90, nodes: 7_000, hashMb: 16 })
+    expect(resolveBrowserPlayOptions('strong')).toMatchObject({ elo: 2200, skillLevel: 14, moveTimeMs: 60, nodes: 3_000, hashMb: 16 })
     expect(resolveBrowserPlayOptions('balanced', {
       ...DEFAULT_ENGINE_SETTINGS,
       profile: 'custom',
@@ -86,15 +86,15 @@ describe('browser Stockfish UCI parsing', () => {
       multiPv: 4,
       depth: 40,
     })).toMatchObject({
-      moveTimeMs: 60,
-      nodes: 3_000,
+      moveTimeMs: 50,
+      nodes: 1_500,
       hashMb: 16,
       multiPv: 1,
       depth: null,
     })
     expect(resolveBrowserPlayOptions('balanced', DEFAULT_ENGINE_SETTINGS, 2)).toMatchObject({
-      moveTimeMs: 60,
-      nodes: 3_000,
+      moveTimeMs: 50,
+      nodes: 1_500,
       hashMb: 16,
       multiPv: 2,
     })
@@ -106,8 +106,8 @@ describe('browser Stockfish UCI parsing', () => {
       multiPv: 6,
       hashMb: 4097,
     } as typeof DEFAULT_ENGINE_SETTINGS)).toMatchObject({
-      moveTimeMs: 60,
-      nodes: 3_000,
+      moveTimeMs: 50,
+      nodes: 1_500,
       multiPv: 1,
       hashMb: 16,
     })
@@ -135,7 +135,7 @@ describe('BrowserStockfishEngine', () => {
     expect(worker.messages).toContain('setoption name Threads value 1')
     expect(worker.messages).toContain('setoption name UCI_Elo value 1700')
     expect(worker.messages).toContain(`position fen ${fen}`)
-    expect(worker.messages).toContain('go movetime 60 nodes 3000')
+    expect(worker.messages).toContain('go movetime 50 nodes 1500')
 
     engine.dispose()
     expect(worker.terminated).toBe(true)
@@ -155,7 +155,7 @@ describe('BrowserStockfishEngine', () => {
     expect(worker.messages).toContain('setoption name Threads value 1')
     expect(worker.messages).toContain('setoption name MultiPV value 2')
     expect(worker.messages.filter((message) => message.startsWith('go '))).toEqual([
-      'go movetime 60 nodes 3000',
+      'go movetime 50 nodes 1500',
     ])
 
     engine.dispose()

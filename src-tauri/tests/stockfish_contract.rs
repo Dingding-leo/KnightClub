@@ -88,19 +88,19 @@ fn maps_levels_to_multi_dimensional_strength_presets() {
     let strong = strength_preset("strong").expect("strong preset");
 
     assert!(easy.elo < balanced.elo && balanced.elo < strong.elo);
-    assert!(easy.move_time_ms < balanced.move_time_ms);
+    assert!(easy.move_time_ms <= balanced.move_time_ms);
     assert!(balanced.move_time_ms < strong.move_time_ms);
     assert_eq!(easy.move_time_ms, 50);
-    assert_eq!(balanced.move_time_ms, 60);
-    assert_eq!(strong.move_time_ms, 90);
+    assert_eq!(balanced.move_time_ms, 50);
+    assert_eq!(strong.move_time_ms, 60);
     assert!(easy.skill_level < strong.skill_level);
     assert!(easy.limit_strength && balanced.limit_strength && strong.limit_strength);
     assert_eq!(easy.threads, 1);
     assert_eq!(balanced.threads, 1);
     assert_eq!(strong.threads, 1);
     assert_eq!(easy.nodes, Some(1_000));
-    assert_eq!(balanced.nodes, Some(3_000));
-    assert_eq!(strong.nodes, Some(7_000));
+    assert_eq!(balanced.nodes, Some(1_500));
+    assert_eq!(strong.nodes, Some(3_000));
     assert_eq!(strong.hash_mb, 16);
 }
 
@@ -157,7 +157,7 @@ fn validates_and_serializes_optional_play_candidate_counts() {
     let mut preset = strength_preset("balanced").expect("preset");
     apply_play_candidate_count(&mut preset, Some(2)).expect("two candidates are allowed");
     assert_eq!(preset.multi_pv, 2);
-    assert_eq!(go_command(&preset), "go movetime 60 nodes 3000");
+    assert_eq!(go_command(&preset), "go movetime 50 nodes 1500");
     assert!(apply_play_candidate_count(&mut preset, Some(3)).is_err());
 
     let mut custom = preset.clone();
@@ -332,7 +332,7 @@ done
             .filter(|line| line.starts_with("go movetime "))
             .copied()
             .collect::<Vec<_>>(),
-        vec!["go movetime 60 nodes 3000"]
+        vec!["go movetime 50 nodes 1500"]
     );
 }
 
@@ -413,9 +413,9 @@ done
             .copied()
             .collect::<Vec<_>>(),
         vec![
-            "go movetime 60 nodes 3000",
-            "go movetime 80 nodes 3000",
-            "go movetime 80 nodes 3000",
+            "go movetime 50 nodes 1500",
+            "go movetime 80 nodes 1500",
+            "go movetime 80 nodes 1500",
         ]
     );
 }
@@ -507,7 +507,7 @@ done
             .filter(|line| line.starts_with("go movetime "))
             .copied()
             .collect::<Vec<_>>(),
-        vec!["go movetime 60 nodes 3000", "go movetime 60 nodes 3000"]
+        vec!["go movetime 50 nodes 1500", "go movetime 50 nodes 1500"]
     );
 }
 

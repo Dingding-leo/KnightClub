@@ -135,8 +135,8 @@ fn real_stockfish_honors_low_compute_play_presets() {
 
     for (request_id, level, node_cap) in [
         (1, "easy", 1_000),
-        (2, "balanced", 3_000),
-        (3, "strong", 7_000),
+        (2, "balanced", 1_500),
+        (3, "strong", 3_000),
     ] {
         let settings = strength_preset(level).expect("known preset");
         let outcome = engine

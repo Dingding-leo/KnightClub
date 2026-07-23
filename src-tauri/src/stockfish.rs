@@ -346,25 +346,25 @@ pub fn strength_preset(level: &str) -> Result<SearchSettings, EngineError> {
         }),
         "balanced" => Ok(SearchSettings {
             elo: 1700,
-            move_time_ms: 60,
+            move_time_ms: 50,
             skill_level: 8,
             limit_strength: true,
             threads: 1,
             hash_mb: 16,
             multi_pv: 1,
             depth: None,
-            nodes: Some(3_000),
+            nodes: Some(1_500),
         }),
         "strong" => Ok(SearchSettings {
             elo: 2200,
-            move_time_ms: 90,
+            move_time_ms: 60,
             skill_level: 14,
             limit_strength: true,
             threads: 1,
             hash_mb: 16,
             multi_pv: 1,
             depth: None,
-            nodes: Some(7_000),
+            nodes: Some(3_000),
         }),
         _ => Err(EngineError::InvalidLevel(format!(
             "Unknown engine level: {level}"
@@ -462,7 +462,11 @@ pub fn apply_play_resource_budget(
         .expect("every bounded Play preset has a finite node cap");
 
     settings.move_time_ms = settings.move_time_ms.min(budget.move_time_ms);
-    settings.nodes = Some(settings.nodes.map_or(budget_nodes, |nodes| nodes.min(budget_nodes)));
+    settings.nodes = Some(
+        settings
+            .nodes
+            .map_or(budget_nodes, |nodes| nodes.min(budget_nodes)),
+    );
     settings.depth = None;
     settings.multi_pv = 1;
     settings.threads = 1;
@@ -1279,6 +1283,17 @@ fn discard_engine_after_error(engine: &mut Option<ManagedEngine>, error: &Engine
     }
 }
 
+/// Drops the shared native process only when no Play, Verify, or Review task
+/// currently owns it. This is deliberately non-blocking: a just-started live
+/// move remains authoritative, while a completed high-Hash Review can return
+/// its NNUE network and transposition table to the operating system at once.
+fn release_idle_engine(engine: &Arc<Mutex<Option<ManagedEngine>>>) -> bool {
+    match engine.try_lock() {
+        Ok(mut guard) => guard.take().is_some(),
+        Err(_) => false,
+    }
+}
+
 #[derive(Clone)]
 pub struct StockfishState {
     engine: Arc<Mutex<Option<ManagedEngine>>>,
@@ -1403,8 +1418,7 @@ fn stockfish_best_move_blocking(
     let path = discover_for_app(request.engine_path).map_err(|error| error.to_string())?;
     let mut settings = resolve_search_settings(&request.level, request.settings)
         .map_err(|error| error.to_string())?;
-    apply_play_resource_budget(&request.level, &mut settings)
-        .map_err(|error| error.to_string())?;
+    apply_play_resource_budget(&request.level, &mut settings).map_err(|error| error.to_string())?;
     apply_play_candidate_count(&mut settings, request.candidate_count)
         .map_err(|error| error.to_string())?;
     let mut guard = state
@@ -1558,6 +1572,14 @@ pub fn stockfish_analysis_stop(state: State<'_, AnalysisState>, request_id: u64)
     record_analysis_cancellation(request_id, state.cancelled_requests.as_ref());
 }
 
+/// Review calls this only after its own job has settled. `try_lock` makes the
+/// request safe if a player immediately starts a live move or another Review:
+/// in that case nothing is released and the active task keeps its supervisor.
+#[tauri::command]
+pub fn stockfish_release_idle(state: State<'_, AnalysisState>) -> bool {
+    release_idle_engine(&state.engine)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1603,13 +1625,13 @@ mod tests {
         assert_eq!(settings.elo, 2460);
         assert_eq!(settings.skill_level, 17);
         assert!(!settings.limit_strength);
-        assert_eq!(settings.move_time_ms, 90);
-        assert_eq!(settings.nodes, Some(7_000));
+        assert_eq!(settings.move_time_ms, 60);
+        assert_eq!(settings.nodes, Some(3_000));
         assert_eq!(settings.depth, None);
         assert_eq!(settings.multi_pv, 1);
         assert_eq!(settings.threads, 1);
         assert_eq!(settings.hash_mb, 16);
-        assert_eq!(go_command(&settings), "go movetime 90 nodes 7000");
+        assert_eq!(go_command(&settings), "go movetime 60 nodes 3000");
 
         apply_play_candidate_count(&mut settings, Some(2))
             .expect("a named bot may request one close alternative");
@@ -1805,6 +1827,96 @@ mod tests {
 
         discard_engine_after_error(&mut engine, &EngineError::Timeout("late reply".into()));
         assert!(engine.is_none(), "a failed engine must still be recycled");
+    }
+
+    #[test]
+    fn idle_release_is_non_blocking_and_clears_an_available_supervisor() {
+        let engine: Arc<Mutex<Option<ManagedEngine>>> = Arc::new(Mutex::new(None));
+
+        let held = engine.lock().expect("hold managed engine mutex");
+        assert!(
+            !release_idle_engine(&engine),
+            "idle cleanup must never wait behind an active engine task"
+        );
+        drop(held);
+
+        assert!(
+            !release_idle_engine(&engine),
+            "an empty pool cannot claim that it released a process"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn idle_release_sends_quit_and_drops_a_completed_native_review_process() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary engine directory");
+        let engine_path = directory.path().join("stockfish-idle-release-test");
+        let command_log = directory.path().join("commands.log");
+        let script = format!(
+            r#"#!/bin/sh
+COMMAND_LOG="{}"
+while IFS= read -r line; do
+  echo "$line" >> "$COMMAND_LOG"
+  case "$line" in
+    uci) echo "id name Idle Release Fixture"; echo "uciok" ;;
+    isready) echo "readyok" ;;
+    quit) exit 0 ;;
+  esac
+done
+"#,
+            command_log.display(),
+        );
+        fs::write(&engine_path, script).expect("write fake engine");
+        let mut permissions = fs::metadata(&engine_path)
+            .expect("engine metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&engine_path, permissions).expect("mark fake engine executable");
+
+        let engine = Arc::new(Mutex::new(Some(ManagedEngine {
+            path: engine_path.clone(),
+            supervisor: EngineSupervisor::new(engine_path),
+        })));
+        {
+            let mut guard = engine.lock().expect("managed engine");
+            guard
+                .as_mut()
+                .expect("managed engine exists")
+                .supervisor
+                .initialize(Duration::from_secs(3))
+                .expect("fixture initializes");
+        }
+        let process_id = engine
+            .lock()
+            .expect("managed engine")
+            .as_ref()
+            .and_then(|managed| managed.supervisor.child.as_ref())
+            .expect("fixture child remains available")
+            .id()
+            .to_string();
+
+        assert!(release_idle_engine(&engine));
+        assert!(engine.lock().expect("managed engine").is_none());
+        let released = (0..20).any(|_| {
+            let running = Command::new("kill")
+                .args(["-0", process_id.as_str()])
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false);
+            if !running {
+                true
+            } else {
+                thread::sleep(Duration::from_millis(10));
+                false
+            }
+        });
+        assert!(
+            released,
+            "dropping an idle supervisor must terminate its native process"
+        );
     }
 
     #[cfg(unix)]

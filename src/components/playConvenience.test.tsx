@@ -208,7 +208,7 @@ describe('engine settings convenience contracts', () => {
     expect(markup).toContain('role="status"')
     expect(markup).toContain('Stockfish 18')
     expect(markup).toContain('Live bot moves always stay low-resource')
-    expect(markup).toContain('Strong 90 ms / 7,000 nodes')
+    expect(markup).toContain('Strong 60 ms / 3,000 nodes')
   })
 
   it('holds setup controls while another local engine task has priority', () => {

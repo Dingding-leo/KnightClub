@@ -1,5 +1,7 @@
 # Testing
 
+**Latest low-energy engine evidence (2026-07-23):** lint and typecheck passed; the frontend suite passed with 69 files / 418 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 52 tests, including the installed native Stockfish smoke suite. Standard production, `/KnightLab/` Pages-base production and the macOS Tauri bundle passed. Browser, TypeScript-native and Rust contracts prove every live Easy/Balanced/Strong, Elo and Custom reply is capped at 50/50/60 ms and 1k/1.5k/3k nodes with one thread and 16 MB Hash. The native idle-release contract proves a completed Review process is terminated only when the shared mutex is free; a held active engine makes release a non-blocking no-op. This is automated/build evidence, not a manual packaged-desktop walkthrough.
+
 **Latest saved-library responsiveness evidence (2026-07-23):** lint and typecheck passed; the frontend suite passed with 69 files / 417 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 47 tests. Browser-worker contracts prove a summary hydration result rejects PGN-bearing rows and returns one full record only for an explicit selected-game request; database contracts prove native summary IPC omits `pgn`, a selected detail round-trips and corrupt detail rows fail closed. Saved-review metadata contracts cover legacy source linking without parsing notation. This is automated evidence, not a manual large-library browser or packaged-desktop walkthrough.
 
 ## Fast deterministic suite

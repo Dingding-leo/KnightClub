@@ -230,6 +230,18 @@ export class StockfishAnalysisClient {
     if (this.invoke) void this.invoke('stockfish_analysis_stop', { requestId }).catch(() => undefined)
   }
 
+  /**
+   * Full Review is the only normal flow that can intentionally use a large
+   * native Hash. Once that job settles, ask the shared desktop pool to drop
+   * an actually idle child so its NNUE network and Hash do not linger after
+   * the player has their report. The command is non-blocking and refuses to
+   * interrupt a concurrent live Play or newer Review request.
+   */
+  releaseIdle(): void {
+    if (!this.invoke || this.browser) return
+    void this.invoke('stockfish_release_idle').catch(() => undefined)
+  }
+
   dispose(): void {
     this.cancel()
     this.browser?.dispose()

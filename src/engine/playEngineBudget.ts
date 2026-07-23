@@ -15,8 +15,8 @@ export const PLAY_ENGINE_BUDGETS: Readonly<Record<BotLevel, Readonly<{
   nodes: number
 }>>> = {
   easy: { moveTimeMs: 50, nodes: 1_000 },
-  balanced: { moveTimeMs: 60, nodes: 3_000 },
-  strong: { moveTimeMs: 90, nodes: 7_000 },
+  balanced: { moveTimeMs: 50, nodes: 1_500 },
+  strong: { moveTimeMs: 60, nodes: 3_000 },
 }
 
 /**

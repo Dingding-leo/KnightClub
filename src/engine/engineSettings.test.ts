@@ -8,8 +8,8 @@ import {
 describe('engine settings', () => {
   it('starts new configurable engines with a balanced low-compute budget', () => {
     expect(DEFAULT_ENGINE_SETTINGS).toMatchObject({
-      moveTimeMs: 60,
-      nodes: 3_000,
+      moveTimeMs: 50,
+      nodes: 1_500,
       threads: 1,
       hashMb: 16,
     })

@@ -61,6 +61,7 @@ pub fn run() {
             database::database_clear_games,
             stockfish::stockfish_analyze,
             stockfish::stockfish_analysis_stop,
+            stockfish::stockfish_release_idle,
             stockfish::stockfish_best_move,
             stockfish::stockfish_probe,
             stockfish::stockfish_stop

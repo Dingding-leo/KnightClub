@@ -109,4 +109,13 @@ describe('StockfishAnalysisClient', () => {
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
     expect(invoke).toHaveBeenCalledWith('stockfish_analysis_stop', { requestId: 10 })
   })
+
+  it('asks the native pool to release an idle high-resource Review runtime', () => {
+    const invoke = vi.fn(async () => undefined)
+    const client = new StockfishAnalysisClient(invoke, 10)
+
+    client.releaseIdle()
+
+    expect(invoke).toHaveBeenCalledWith('stockfish_release_idle')
+  })
 })

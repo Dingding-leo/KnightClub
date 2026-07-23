@@ -107,8 +107,8 @@ describe('StockfishClient', () => {
         candidateCount: 2,
         settings: expect.objectContaining({
           profile: 'custom',
-          moveTimeMs: 60,
-          nodes: 3_000,
+          moveTimeMs: 50,
+          nodes: 1_500,
           threads: 1,
           hashMb: 16,
           depth: null,
@@ -137,9 +137,9 @@ describe('StockfishClient', () => {
       request: expect.objectContaining({
         settings: expect.objectContaining({
           profile: 'custom',
-          moveTimeMs: 60,
+          moveTimeMs: 50,
           depth: null,
-          nodes: 3_000,
+          nodes: 1_500,
           multiPv: 1,
           threads: 1,
           hashMb: 16,

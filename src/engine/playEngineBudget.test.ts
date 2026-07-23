@@ -9,8 +9,8 @@ describe('Play engine budget', () => {
   it('keeps the per-level bot budgets finite and low-cost', () => {
     expect(PLAY_ENGINE_BUDGETS).toEqual({
       easy: { moveTimeMs: 50, nodes: 1_000 },
-      balanced: { moveTimeMs: 60, nodes: 3_000 },
-      strong: { moveTimeMs: 90, nodes: 7_000 },
+      balanced: { moveTimeMs: 50, nodes: 1_500 },
+      strong: { moveTimeMs: 60, nodes: 3_000 },
     })
   })
 
@@ -35,9 +35,9 @@ describe('Play engine budget', () => {
       elo: 2460,
       skillLevel: 17,
       limitStrength: false,
-      moveTimeMs: 90,
+      moveTimeMs: 60,
       depth: null,
-      nodes: 7_000,
+      nodes: 3_000,
       multiPv: 1,
       threads: 1,
       hashMb: 16,
@@ -90,8 +90,8 @@ describe('Play engine budget', () => {
     })).toEqual({
       ...DEFAULT_ENGINE_SETTINGS,
       profile: 'custom',
-      moveTimeMs: 60,
-      nodes: 3_000,
+      moveTimeMs: 50,
+      nodes: 1_500,
       depth: null,
       multiPv: 1,
       threads: 1,

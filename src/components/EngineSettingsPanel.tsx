@@ -159,7 +159,7 @@ export function EngineSettingsPanel({
           </p>
         )}
         <p className="engine-settings__hint">
-          Live bot moves always stay low-resource: one thread, 16 MB Hash and at most Easy 50 ms / 1,000 nodes, Balanced 60 ms / 3,000 nodes or Strong 90 ms / 7,000 nodes. Lower move-time or node choices are honoured; higher values never increase a Play reply. A named opponent may request one close second line from that same capped search.
+          Live bot moves always stay low-resource: one thread, 16 MB Hash and at most Easy 50 ms / 1,000 nodes, Balanced 50 ms / 1,500 nodes or Strong 60 ms / 3,000 nodes. Lower move-time or node choices are honoured; higher values never increase a Play reply. A named opponent may request one close second line from that same capped search.
         </p>
         <p className="engine-settings__hint">{desktop ? 'Threads and Hash remain available to Review analysis, where higher values can use more CPU and memory.' : 'The web engine uses one isolated worker; Review caps its Hash at 128 MB.'} Changes are saved locally for the next applicable local task.</p>
       </div>

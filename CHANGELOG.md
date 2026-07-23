@@ -4,6 +4,7 @@
 
 ### Added
 
+- Live Play now uses still-smaller bounded bot ceilings: Easy/Balanced/Strong use 50/50/60 ms and 1k/1.5k/3k nodes with one thread and 16 MB Hash; desktop full Review also releases its shared native Stockfish process once its own work has settled and no newer task owns the engine
 - Browser PWA installs now keep the optional 7 MB Stockfish Worker/WebAssembly pair out of the first-visit app-shell precache, then retain it with a bounded cache-first route after a player actually uses bot Play or Review
 - Active-game browser/SQLite snapshots now keep only the latest state until a short idle window, eliminating synchronous long-session storage writes from the move path while flushing on terminal results, page hide and explicit session replacement
 - Library and Insights now retain validated game summaries without PGN text; browser Worker and desktop SQLite paths fetch one complete game only after an explicit Open or Review action

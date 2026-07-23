@@ -1366,8 +1366,12 @@ export function AnalysisWorkspace({
     } finally {
       // Stop, navigation and a newer run can all replace this ref before the
       // old promise settles. Identity-guarded disposal frees this run's browser
-      // Worker without terminating a newer full-review client.
+      // Worker without terminating a newer full-review client. A settled
+      // desktop full review may have used a deliberately larger Hash, so it
+      // also asks the shared native pool to release itself if no newer task
+      // owns it; the command is a non-blocking no-op while Play is active.
       disposeClientIfCurrent(reviewClient, reviewAnalysisClient)
+      reviewAnalysisClient.releaseIdle()
       if (isReviewRunCurrent(runVersion)) {
         if (reviewAbort.current === controller) reviewAbort.current = null
         setReviewRunning(false)
