@@ -42,6 +42,8 @@ pub fn run() {
             database::database_snapshot,
             database::database_bootstrap,
             database::database_list_games,
+            database::database_list_game_summaries,
+            database::database_load_game,
             database::database_import_legacy,
             database::database_save_active_session,
             database::database_save_preferences,

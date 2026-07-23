@@ -1,13 +1,13 @@
 import { useMemo } from 'react'
 import { BarChart3, Search, Target } from 'lucide-react'
 import { calculateLocalInsights, formatRecord, type RecordSummary } from '../domain/insights'
-import type { StoredGame } from '../storage/gameStore'
+import type { StoredGameSummary } from '../storage/gameStore'
 import { StatCard } from './StatCard'
 
 interface InsightsDashboardProps {
-  games: readonly StoredGame[]
+  games: readonly StoredGameSummary[]
   onPlay: () => void
-  onReviewGame: (game: StoredGame) => void
+  onReviewGame: (game: StoredGameSummary) => void
 }
 
 function scoreLabel(record: RecordSummary): string {

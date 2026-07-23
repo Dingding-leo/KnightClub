@@ -6,6 +6,8 @@
 
 - Browser PWA installs now keep the optional 7 MB Stockfish Worker/WebAssembly pair out of the first-visit app-shell precache, then retain it with a bounded cache-first route after a player actually uses bot Play or Review
 - Active-game browser/SQLite snapshots now keep only the latest state until a short idle window, eliminating synchronous long-session storage writes from the move path while flushing on terminal results, page hide and explicit session replacement
+- Library and Insights now retain validated game summaries without PGN text; browser Worker and desktop SQLite paths fetch one complete game only after an explicit Open or Review action
+- Reviewing a saved Library/Insights game now leaves the active Play board intact and hands long notation straight to Review's cancellable background timeline loader; destructive Open board confirmation appears before any selected-PGN replay
 - A Review → Train practice target now belongs only to that Train visit; leaving Train returns later visits to the normal due-first personal queue instead of pinning an old or mastered exercise
 - Play now defers browser saved-game and tactics-history parsing alongside retry history: Library/Insights and Train adopt one freshness-checked local Worker snapshot only after the relevant workspace opens, with honest preparation states instead of an empty-data flash
 - Live Play now independently enforces its low-compute Easy/Balanced/Strong resource ceiling for preset, Elo and Custom profiles in the browser adapter, TypeScript native boundary and Rust UCI command; Custom strength identity remains available while a reply cannot gain extra threads, Hash, depth or unbounded search

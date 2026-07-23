@@ -40,6 +40,7 @@ describe('progressive library rendering', () => {
       <LibraryResults
         games={Array.from({ length: 500 }, (_, index) => libraryGame(index + 1))}
         revealCount={24}
+        openingGameId={null}
         onRevealMore={() => {}}
         onReview={() => {}}
         onOpen={() => {}}

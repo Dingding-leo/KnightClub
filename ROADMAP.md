@@ -80,7 +80,7 @@
 
 ## Phase 5 — Product polish
 
-- [x] On-demand engine startup and post-first-use PWA engine caching, non-Play workspace code splitting/prefetch, progressive in-game setup disclosure, single-thread/node-bounded play presets (50/60/90 ms and 1k/3k/7k nodes), isolated live-clock repainting, memoized board-square and review-progress interaction, shared Play history/PGN snapshots, lazy desktop library hydration, idle-batched active-session persistence with page-exit/terminal flushes, cached acknowledged UCI options and bot-over-review engine priority
+- [x] On-demand engine startup and post-first-use PWA engine caching, non-Play workspace code splitting/prefetch, progressive in-game setup disclosure, single-thread/node-bounded play presets (50/60/90 ms and 1k/3k/7k nodes), isolated live-clock repainting, memoized board-square and review-progress interaction, shared Play history/PGN snapshots, summary-only lazy Library/Insights hydration with on-demand selected-game detail, non-destructive Worker-backed saved-game Review, idle-batched active-session persistence with page-exit/terminal flushes, cached acknowledged UCI options and bot-over-review engine priority
 - [x] Live Play PGN serialization from cached verbose moves, preserving immediate autosave/export, setup/result metadata and a conservative annotated-game fallback
 - [ ] Keyboard-complete navigation and screen-reader audit
 - [ ] Multiple original board/piece themes and optional sounds

@@ -2,10 +2,12 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import {
   hasValidBotProfileField,
   hasValidPlayerSideFields,
+  isStoredGameSummary,
   normalizeActiveSession,
   type ActiveSession,
   type Preferences,
   type StoredGame,
+  type StoredGameSummary,
 } from './gameStore'
 import { assertPersistedReview, assertPersistedReviewForSave, type PersistedReview } from '../review/reviewPersistence'
 import {
@@ -148,6 +150,18 @@ function parseGames(value: unknown): StoredGame[] {
   return value as StoredGame[]
 }
 
+function parseGameSummaries(value: unknown): StoredGameSummary[] {
+  if (!Array.isArray(value) || value.length > MAX_GAMES) {
+    throw new Error('KnightClub received an invalid game library.')
+  }
+  if (!value.every(isStoredGameSummary)) {
+    throw new Error('KnightClub received an invalid game library.')
+  }
+  const ids = new Set(value.map((game) => game.id))
+  if (ids.size !== value.length) throw new Error('KnightClub received duplicate saved games.')
+  return value as StoredGameSummary[]
+}
+
 export class DatabaseClient {
   private readonly invoke: Invoke
   private writeQueue: Promise<void> = Promise.resolve()
@@ -173,6 +187,24 @@ export class DatabaseClient {
   /** A read barrier keeps a newly saved game ahead of its later library fetch. */
   async listGames(): Promise<StoredGame[]> {
     return this.enqueueRaw(() => this.invoke('database_list_games').then(parseGames))
+  }
+
+  /** Lists metadata only; large PGNs remain in SQLite until an explicit open. */
+  async listGameSummaries(): Promise<StoredGameSummary[]> {
+    return this.enqueueRaw(() => this.invoke('database_list_game_summaries').then(parseGameSummaries))
+  }
+
+  /** A selected Library row is the only normal UI path that needs its PGN. */
+  async loadGame(gameId: string): Promise<StoredGame | null> {
+    if (typeof gameId !== 'string' || gameId.length < 1 || gameId.length > 512) {
+      throw new Error('Saved game ID is invalid.')
+    }
+    return this.enqueueRaw(async () => {
+      const value = await this.invoke('database_load_game', { gameId })
+      if (value === null) return null
+      assertGame(value)
+      return value
+    })
   }
 
   private enqueueRaw<T>(operation: () => Promise<T>): Promise<T> {

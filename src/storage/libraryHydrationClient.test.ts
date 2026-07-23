@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { StoredGame } from './gameStore'
-import { hydrateLibrary } from './libraryHydration'
+import { hydrateLibrarySummaries, loadLibraryGame } from './libraryHydration'
+import { toStoredGameSummary } from './gameStore'
 import {
   LibraryHydrationClient,
   type LibraryHydrationWorkerLike,
@@ -66,12 +67,12 @@ describe('LibraryHydrationClient', () => {
     if (!request) throw new Error('Expected a library hydration request.')
 
     worker.reply({
-      type: 'library-hydration-result',
+      type: 'library-summaries-result',
       id: request.id,
-      games: [item],
+      games: [toStoredGameSummary(item)],
     })
 
-    await expect(pending).resolves.toEqual([item])
+    await expect(pending).resolves.toEqual([toStoredGameSummary(item)])
     expect(worker.terminated).toBe(true)
     client.dispose()
   })
@@ -96,12 +97,12 @@ describe('LibraryHydrationClient', () => {
     const request = workers[1]?.messages[0]
     if (!request) throw new Error('Expected a replacement library hydration request.')
     workers[1]?.reply({
-      type: 'library-hydration-result',
+      type: 'library-summaries-result',
       id: request.id,
-      games: [item],
+      games: [toStoredGameSummary(item)],
     })
 
-    await expect(second).resolves.toEqual([item])
+    await expect(second).resolves.toEqual([toStoredGameSummary(item)])
     client.dispose()
   })
 
@@ -130,7 +131,7 @@ describe('LibraryHydrationClient', () => {
     })
 
     expect(settled).toBe(false)
-    await expect(pending).resolves.toEqual([item])
+    await expect(pending).resolves.toEqual([toStoredGameSummary(item)])
     client.dispose()
   })
 
@@ -146,7 +147,7 @@ describe('LibraryHydrationClient', () => {
     })
 
     expect(settled).toBe(false)
-    await expect(pending).resolves.toEqual([item])
+    await expect(pending).resolves.toEqual([toStoredGameSummary(item)])
     client.dispose()
   })
 
@@ -158,7 +159,7 @@ describe('LibraryHydrationClient', () => {
 
     worker.failToStart()
 
-    await expect(pending).resolves.toEqual([item])
+    await expect(pending).resolves.toEqual([toStoredGameSummary(item)])
     expect(worker.terminated).toBe(true)
     client.dispose()
   })
@@ -180,14 +181,48 @@ describe('LibraryHydrationClient', () => {
     client.dispose()
   })
 
+  it('rejects a full-PGN response on the summary channel', async () => {
+    const item = game()
+    const worker = new FakeLibraryHydrationWorker()
+    const client = new LibraryHydrationClient(() => worker, true)
+    const outcome = client.hydrate(JSON.stringify([item])).catch((error: unknown) => error)
+    const request = worker.messages[0]
+    if (!request) throw new Error('Expected a summary request.')
+
+    worker.reply({
+      type: 'library-summaries-result',
+      id: request.id,
+      games: [item] as unknown as ReturnType<typeof toStoredGameSummary>[],
+    })
+
+    await expect(outcome).resolves.toMatchObject({ message: 'Library Worker returned an invalid summary list.' })
+    client.dispose()
+  })
+
   it('fails closed for malformed snapshots in the shared Worker/fallback parser', async () => {
-    expect(hydrateLibrary('{ definitely not JSON')).toEqual([])
-    expect(hydrateLibrary(JSON.stringify([{ id: 'missing-required-fields' }]))).toEqual([])
+    expect(hydrateLibrarySummaries('{ definitely not JSON')).toEqual([])
+    expect(hydrateLibrarySummaries(JSON.stringify([{ id: 'missing-required-fields' }]))).toEqual([])
 
     const client = new LibraryHydrationClient(() => {
       throw new Error('Workers unavailable')
     }, false)
     await expect(client.hydrate('{ definitely not JSON')).resolves.toEqual([])
+    client.dispose()
+  })
+
+  it('returns one full PGN only for an explicit selected-game request', async () => {
+    const first = game('first')
+    const second = game('second')
+    const worker = new FakeLibraryHydrationWorker()
+    const client = new LibraryHydrationClient(() => worker, true)
+    const pending = client.load(JSON.stringify([first, second]), second.id)
+    const request = worker.messages[0]
+    if (!request || request.type !== 'load-library-game') throw new Error('Expected a selected-game request.')
+
+    worker.reply({ type: 'library-game-result', id: request.id, game: second })
+
+    await expect(pending).resolves.toEqual(second)
+    expect(loadLibraryGame(JSON.stringify([first, second]), 'missing')).toBeNull()
     client.dispose()
   })
 })

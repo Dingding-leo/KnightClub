@@ -136,9 +136,10 @@ import {
 import {
   clearActiveSession,
   clearLibrary,
+  linkLibraryGameSummariesToReview,
   loadActiveSession,
-  markLibraryGamesReviewed,
   loadPreferences,
+  mergeLibraryGameSummaries,
   mergeLibraryGames,
   normalizePreferences,
   readBrowserLibraryRawStrict,
@@ -148,6 +149,8 @@ import {
   updateGame,
   type ActiveSession,
   type StoredGame,
+  type StoredGameSummary,
+  toStoredGameSummary,
 } from './storage/gameStore'
 import { DatabaseClient } from './storage/databaseClient'
 import { ActiveSessionPersistence } from './storage/activeSessionPersistence'
@@ -183,6 +186,7 @@ type Tab = 'play' | 'review' | 'train' | 'library' | 'insights'
 type Promotion = { from: Square; to: Square; choices: PieceSymbol[]; kind: 'move' | 'premove' }
 type DatabaseStatus = { kind: 'browser' | 'migrating' | 'ready' | 'recovered' | 'error'; message: string }
 type LibraryLoadState = 'idle' | 'loading' | 'ready' | 'error'
+type ReviewSource = Pick<StoredGame, 'id' | 'pgn'>
 
 const navItems: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
   { id: 'play', label: 'Play', icon: Gamepad2 },
@@ -438,13 +442,13 @@ function PlayerBar({ color, name, detail, active, isBot, botAvatar, thinking, pa
   )
 }
 
-function profileForStoredGame(item: StoredGame) {
+function profileForStoredGame(item: StoredGameSummary) {
   return isBotProfileId(item.botProfileId)
     ? botProfileForId(item.botProfileId)
     : profileForLegacyLevel(item.botLevel)
 }
 
-function searchableLibraryText(item: StoredGame): string {
+function searchableLibraryText(item: StoredGameSummary): string {
   const storedProfile = item.mode === 'bot' ? profileForStoredGame(item) : null
   return [
     item.result,
@@ -457,15 +461,16 @@ function searchableLibraryText(item: StoredGame): string {
 }
 
 interface LibraryResultsProps {
-  games: readonly StoredGame[]
+  games: readonly StoredGameSummary[]
   revealCount: number
   onRevealMore: () => void
-  onReview: (item: StoredGame) => void
-  onOpen: (item: StoredGame) => void
+  openingGameId: string | null
+  onReview: (item: StoredGameSummary) => void
+  onOpen: (item: StoredGameSummary) => void
 }
 
 /** Renders only a progressive page after the complete library has been filtered. */
-export function LibraryResults({ games, revealCount, onRevealMore, onReview, onOpen }: LibraryResultsProps) {
+export function LibraryResults({ games, revealCount, onRevealMore, openingGameId, onReview, onOpen }: LibraryResultsProps) {
   const page = progressiveLibraryResults(games, revealCount)
   const nextBatch = Math.min(LIBRARY_PAGE_SIZE, page.remainingCount)
 
@@ -481,8 +486,8 @@ export function LibraryResults({ games, revealCount, onRevealMore, onReview, onO
             </div>
             <div className="library-game__state">{item.reviewed ? <em>Reviewed</em> : <span>Ready to review</span>}</div>
             <div className="library-game__actions">
-              <button className="primary-button" type="button" onClick={() => onReview(item)}><Search size={15} />{item.reviewed ? 'Resume review' : 'Review'}</button>
-              <button className="secondary-button" type="button" onClick={() => onOpen(item)}><Play size={15} />Open board</button>
+              <button className="primary-button" type="button" disabled={openingGameId !== null} onClick={() => onReview(item)}><Search size={15} />{openingGameId === item.id ? 'Opening…' : item.reviewed ? 'Resume review' : 'Review'}</button>
+              <button className="secondary-button" type="button" disabled={openingGameId !== null} onClick={() => onOpen(item)}><Play size={15} />{openingGameId === item.id ? 'Opening…' : 'Open board'}</button>
             </div>
           </article>
         ))}
@@ -544,7 +549,7 @@ export default function App() {
   // Library parsing can involve hundreds of PGNs. Play starts with an empty
   // in-memory view and opens that private history only when Library, Insights
   // or a one-time desktop migration actually needs it.
-  const [library, setLibrary] = useState<StoredGame[]>([])
+  const [library, setLibrary] = useState<StoredGameSummary[]>([])
   const [libraryLoadState, setLibraryLoadState] = useState<LibraryLoadState>('idle')
   const [libraryQuery, setLibraryQuery] = useState('')
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'reviewed' | 'unreviewed'>('all')
@@ -564,6 +569,12 @@ export default function App() {
   const [requestedRetryKey, setRequestedRetryKey] = useState<string | null>(null)
   const [requestedReviewTarget, setRequestedReviewTarget] = useState<{ reviewKey: string; sourcePly: number } | null>(null)
   const [requestedPlayPreviewTarget, setRequestedPlayPreviewTarget] = useState<{ sourcePly: number; expectedFen: string } | null>(null)
+  // A Library review is deliberately separate from the live board. Holding a
+  // PGN reference here is cheap; AnalysisWorkspace handles a long replay in
+  // its cancellable Worker after its Review shell has painted.
+  const [reviewSource, setReviewSource] = useState<ReviewSource | null>(null)
+  const [openingLibraryGameId, setOpeningLibraryGameId] = useState<string | null>(null)
+  const [libraryActionError, setLibraryActionError] = useState<string | null>(null)
   const [databaseReady, setDatabaseReady] = useState(!desktop)
   const [databaseStatus, setDatabaseStatus] = useState<DatabaseStatus>(desktop
     ? { kind: 'migrating' as const, message: 'Preparing your private game database…' }
@@ -584,10 +595,12 @@ export default function App() {
   const retryHistoryRequestVersion = useRef(0)
   const retryHydrationClient = useRef<TrainingRetryHydrationClient | null>(null)
   const libraryHistoryReady = useRef(false)
-  const libraryHistoryHydration = useRef<Promise<StoredGame[]> | null>(null)
+  const libraryHistoryHydration = useRef<Promise<StoredGameSummary[]> | null>(null)
   const libraryHistoryRequestVersion = useRef(0)
   const libraryHydrationClient = useRef<LibraryHydrationClient | null>(null)
+  const libraryDetailClient = useRef<LibraryHydrationClient | null>(null)
   const libraryItemsRef = useRef(library)
+  const openingLibraryGameIdRef = useRef<string | null>(openingLibraryGameId)
   const tacticsHistoryReady = useRef(false)
   const tacticsHistoryHydration = useRef<Promise<TacticsState> | null>(null)
   const tacticsHistoryRequestVersion = useRef(0)
@@ -597,8 +610,9 @@ export default function App() {
   const activeSessionPersistence = useRef<ActiveSessionPersistence | null>(null)
   const activeSessionPersistRef = useRef<(session: ActiveSession) => void>(() => {})
   const libraryRequestVersion = useRef(0)
+  const libraryDetailRequestVersion = useRef(0)
   const pendingNativeGameSaves = useRef<StoredGame[]>([])
-  const librarySearchTextCache = useRef(new WeakMap<StoredGame, string>())
+  const librarySearchTextCache = useRef(new WeakMap<StoredGameSummary, string>())
   const soundsEnabledRef = useRef(soundsEnabled)
   const captureClockNow = useCallback((nowMs: number) => {
     clockNowRef.current = nowMs
@@ -612,6 +626,7 @@ export default function App() {
   })
   retryItemsRef.current = retryItems
   libraryItemsRef.current = library
+  openingLibraryGameIdRef.current = openingLibraryGameId
   tacticsStateRef.current = tacticsState
   soundsEnabledRef.current = soundsEnabled
   premoveRef.current = premove
@@ -628,6 +643,11 @@ export default function App() {
   const getLibraryHydrationClient = useCallback(() => {
     libraryHydrationClient.current ??= new LibraryHydrationClient()
     return libraryHydrationClient.current
+  }, [])
+
+  const getLibraryDetailClient = useCallback(() => {
+    libraryDetailClient.current ??= new LibraryHydrationClient()
+    return libraryDetailClient.current
   }, [])
 
   const getTacticsHydrationClient = useCallback(() => {
@@ -694,7 +714,7 @@ export default function App() {
     void hydrateTrainingRetryHistory().catch(() => {})
   }, [hydrateTrainingRetryHistory])
 
-  const hydrateBrowserLibrary = useCallback((): Promise<StoredGame[]> => {
+  const hydrateBrowserLibrary = useCallback((): Promise<StoredGameSummary[]> => {
     if (libraryHistoryReady.current) return Promise.resolve(libraryItemsRef.current)
     if (libraryHistoryHydration.current) return libraryHistoryHydration.current
 
@@ -706,7 +726,7 @@ export default function App() {
         // PGN normalization happen in the dedicated Worker after the Library
         // surface has painted.
         let raw = readBrowserLibraryRawStrict()
-        let games: StoredGame[] | null = null
+        let games: StoredGameSummary[] | null = null
         for (let attempt = 0; attempt < 3; attempt += 1) {
           const candidate = await getLibraryHydrationClient().hydrate(raw)
           const latestRaw = readBrowserLibraryRawStrict()
@@ -721,7 +741,7 @@ export default function App() {
           throw new Error('Saved-game hydration was superseded.')
         }
         libraryHistoryReady.current = true
-        setLibrary((current) => mergeLibraryGames(games, current))
+        setLibrary((current) => mergeLibraryGameSummaries(games, current))
         setLibraryLoadState('ready')
         return games
       } catch (error) {
@@ -747,6 +767,29 @@ export default function App() {
     libraryHistoryReady.current = false
     void hydrateBrowserLibrary().catch(() => {})
   }, [hydrateBrowserLibrary, libraryLoadState])
+
+  const hydrateBrowserLibraryForMigration = useCallback(async (): Promise<StoredGame[]> => {
+    // Desktop migration is the one deliberate exception to summary-only
+    // Library state: SQLite needs the complete records exactly once. Keep the
+    // expensive parse in the existing Worker and verify the raw mirror did
+    // not change beneath this import before writing anything native.
+    let raw = readBrowserLibraryRawStrict()
+    let games: StoredGame[] | null = null
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const candidate = await getLibraryHydrationClient().hydrateFull(raw)
+      const latestRaw = readBrowserLibraryRawStrict()
+      if (latestRaw === raw) {
+        games = candidate
+        break
+      }
+      raw = latestRaw
+    }
+    if (games === null) throw new Error('Saved games changed while KnightClub was preparing desktop migration.')
+    libraryHistoryReady.current = true
+    setLibrary((current) => mergeLibraryGameSummaries(games.map(toStoredGameSummary), current))
+    setLibraryLoadState('ready')
+    return games
+  }, [getLibraryHydrationClient])
 
   const hydrateBrowserTacticsHistory = useCallback((): Promise<TacticsState> => {
     if (tacticsHistoryReady.current) return Promise.resolve(tacticsStateRef.current)
@@ -824,11 +867,17 @@ export default function App() {
   }, [])
 
   const cancelBrowserLibraryHydration = useCallback((message: string) => {
-    if (!libraryHistoryHydration.current) return
-    libraryHistoryRequestVersion.current += 1
-    libraryHistoryHydration.current = null
-    libraryHydrationClient.current?.cancel(message)
-    setLibraryLoadState((current) => current === 'loading' ? 'idle' : current)
+    if (libraryHistoryHydration.current) {
+      libraryHistoryRequestVersion.current += 1
+      libraryHistoryHydration.current = null
+      libraryHydrationClient.current?.cancel(message)
+      setLibraryLoadState((current) => current === 'loading' ? 'idle' : current)
+    }
+    if (openingLibraryGameIdRef.current !== null) {
+      libraryDetailRequestVersion.current += 1
+      libraryDetailClient.current?.cancel(message)
+      setOpeningLibraryGameId(null)
+    }
   }, [])
 
   const releaseIdleBrowserRuntimeForReview = useCallback(() => {
@@ -967,6 +1016,11 @@ export default function App() {
     ? pgnFromHistory(game, startFen, verbose, currentResult, { Termination: currentStatus })
     : pgnFromHistory(game, startFen, verbose),
   [game, gameFinished, startFen, verbose, currentResult, currentStatus])
+  // The saved source remains immutable while Review is open. A key below
+  // remounts the workspace when a player explicitly selects another Library
+  // game, so its initial long-PGN Worker path never races the live board.
+  const reviewPgn = reviewSource?.pgn ?? sharePgn
+  const reviewWorkspaceKey = reviewSource ? `library:${reviewSource.id}` : 'live-game'
 
   useEffect(() => {
     if (history.length === 0 || setupAutoCollapsed.current) return
@@ -996,6 +1050,7 @@ export default function App() {
 
   const reviewPreviewPosition = useCallback(() => {
     if (previewPly === null) return
+    setReviewSource(null)
     setRequestedPlayPreviewTarget({ sourcePly: previewPly, expectedFen: previewGame.fen() })
     setNotice('')
     navigateTo('review')
@@ -1069,12 +1124,12 @@ export default function App() {
     if (!database || !databaseReady || libraryLoadState !== 'idle') return
     const requestVersion = ++libraryRequestVersion.current
     setLibraryLoadState('loading')
-    void database.listGames().then((nativeGames) => {
+    void database.listGameSummaries().then((nativeGames) => {
       if (requestVersion !== libraryRequestVersion.current) return
       // The request can begin before a finished game or review update reaches
       // SQLite. Current React state wins for the same ID so old list data
       // never erases that newer local interaction.
-      setLibrary((current) => mergeLibraryGames(nativeGames, current))
+      setLibrary((current) => mergeLibraryGameSummaries(nativeGames, current))
       setLibraryLoadState('ready')
       setDatabaseStatus((current) => current.kind === 'error'
         ? { kind: 'ready', message: 'Saved privately in KnightClub on this device.' }
@@ -1205,6 +1260,7 @@ export default function App() {
 
   const returnToReview = useCallback((item: RetryItem) => {
     setRequestedRetryKey(null)
+    setReviewSource(null)
     setRequestedReviewTarget({ reviewKey: item.reviewKey, sourcePly: item.sourcePly })
     navigateTo('review')
   }, [navigateTo])
@@ -1226,14 +1282,56 @@ export default function App() {
     }
   }, [database, databaseReady, reportDatabaseError])
 
+  const persistLibrarySummaryUpdate = useCallback((summary: StoredGameSummary) => {
+    // The currently reviewed source already supplies its PGN, so its visible
+    // badge can be persisted without another read. Other matching legacy rows
+    // are rare; fetch those one at a time instead of retaining every PGN in
+    // the Library state just to update a boolean.
+    if (reviewSource?.id === summary.id) {
+      persistLibraryGameUpdate({ ...summary, pgn: reviewSource.pgn })
+      return
+    }
+
+    const persistFullDetail = (detail: StoredGame | null) => {
+      if (!detail) return
+      persistLibraryGameUpdate({ ...detail, ...summary })
+    }
+
+    if (database && databaseReady) {
+      void database.loadGame(summary.id)
+        .then(persistFullDetail)
+        .catch(reportDatabaseError)
+      return
+    }
+
+    if (!database) {
+      let raw: string | null
+      try {
+        raw = readBrowserLibraryRawStrict()
+      } catch (error) {
+        reportDatabaseError(error)
+        return
+      }
+      void getLibraryDetailClient().load(raw, summary.id)
+        .then(persistFullDetail)
+        .catch(reportDatabaseError)
+    }
+  }, [database, databaseReady, getLibraryDetailClient, persistLibraryGameUpdate, reportDatabaseError, reviewSource])
+
   const markLinkedGameReviewed = useCallback((review: PersistedReview) => {
-    const { games, changedGames } = markLibraryGamesReviewed(library, review.reviewKey)
+    // `reviewSource` supplies a stable direct link for legacy Library rows
+    // that predate review keys. Existing matching rows remain metadata-only.
+    const { games, changedGames } = linkLibraryGameSummariesToReview(
+      libraryItemsRef.current,
+      review.reviewKey,
+      reviewSource?.id,
+    )
     if (!changedGames.length) return
     setLibrary(games)
     for (const item of changedGames) {
-      persistLibraryGameUpdate(item)
+      persistLibrarySummaryUpdate(item)
     }
-  }, [library, persistLibraryGameUpdate])
+  }, [persistLibrarySummaryUpdate, reviewSource?.id])
 
   const clearPersistedSession = () => {
     activeSessionPersistence.current?.discard()
@@ -1247,6 +1345,10 @@ export default function App() {
     libraryHistoryRequestVersion.current += 1
     libraryHistoryHydration.current = null
     libraryHydrationClient.current?.cancel('Saved games were cleared.')
+    libraryDetailRequestVersion.current += 1
+    libraryDetailClient.current?.cancel('Saved games were cleared.')
+    setOpeningLibraryGameId(null)
+    setLibraryActionError(null)
     libraryHistoryReady.current = true
     clearLibrary()
     setLibrary([])
@@ -1696,6 +1798,18 @@ export default function App() {
   }
 
   const reviewCurrentGame = () => {
+    setReviewSource(null)
+    setNotice('')
+    navigateTo('review')
+  }
+
+  const reviewStored = (item: StoredGame) => {
+    // Reviewing a completed Library game should never overwrite a live board
+    // or make a player reconfirm an unrelated unfinished game. The mounted
+    // Review workspace starts with a shell and gives long PGNs to its Worker.
+    setRequestedReviewTarget(null)
+    setRequestedPlayPreviewTarget(null)
+    setReviewSource({ id: item.id, pgn: item.pgn })
     setNotice('')
     navigateTo('review')
   }
@@ -1712,32 +1826,34 @@ export default function App() {
     } catch { setNotice('Invalid FEN.') }
   }
 
-  const openStored = (item: StoredGame, destination: 'play' | 'review' = 'play') => {
-    try {
-      const next = new Chess(); next.loadPgn(item.pgn)
-      const restoredTermination = isGameTermination(item.termination) ? item.termination : null
-      const restoredStartFen = next.getHeaders().FEN ?? STANDARD_START_FEN
-      const restoredVerbose = next.history({ verbose: true })
-      // A legacy library row obtains its canonical link while its PGN is
-      // already open. Later review completion can then update by metadata
-      // rather than replaying every stored game on the UI thread.
-      const canonicalReviewKey = createReviewKeyFromMoves(restoredStartFen, restoredVerbose)
-      const storedWithReviewKey = item.reviewKey === canonicalReviewKey
-        ? item
-        : { ...item, reviewKey: canonicalReviewKey }
-      const control = isTimeControl(item.timeControl) ? item.timeControl : getTimeControl('unlimited')
-      const restoredHumanColor: Color = item.humanColor === 'b' ? 'b' : 'w'
-      const restoredColorChoice = isHumanColorChoice(item.colorChoice)
-        ? item.colorChoice
-        : restoredHumanColor === 'b' ? 'black' : 'white'
-      const restoredProfile = isBotProfileId(item.botProfileId)
-        ? botProfileForId(item.botProfileId)
-        : profileForLegacyLevel(item.botLevel)
-      requestRestart(
-        destination === 'review' ? 'Review saved game?' : 'Open saved game?',
-        `${destination === 'review' ? 'Reviewing' : 'Opening'} this game replaces the ${history.length}-ply unfinished game.`,
-        destination === 'review' ? 'Open review' : 'Open saved game',
-        () => {
+  const openStored = (item: StoredGame) => {
+    // The confirmation must be immediate. In particular, do not replay a
+    // large PGN merely to ask whether the player wants to replace their board.
+    requestRestart(
+      'Open saved game?',
+      `Opening this game replaces the ${history.length}-ply unfinished game.`,
+      'Open saved game',
+      () => {
+        try {
+          const next = new Chess(); next.loadPgn(item.pgn)
+          const restoredTermination = isGameTermination(item.termination) ? item.termination : null
+          const restoredStartFen = next.getHeaders().FEN ?? STANDARD_START_FEN
+          const restoredVerbose = next.history({ verbose: true })
+          // A legacy row obtains its canonical link only after the player has
+          // explicitly chosen the destructive board-open action. Saved-game
+          // Review takes a separate Worker-backed, non-destructive route.
+          const canonicalReviewKey = createReviewKeyFromMoves(restoredStartFen, restoredVerbose)
+          const storedWithReviewKey = item.reviewKey === canonicalReviewKey
+            ? item
+            : { ...item, reviewKey: canonicalReviewKey }
+          const control = isTimeControl(item.timeControl) ? item.timeControl : getTimeControl('unlimited')
+          const restoredHumanColor: Color = item.humanColor === 'b' ? 'b' : 'w'
+          const restoredColorChoice = isHumanColorChoice(item.colorChoice)
+            ? item.colorChoice
+            : restoredHumanColor === 'b' ? 'black' : 'white'
+          const restoredProfile = isBotProfileId(item.botProfileId)
+            ? botProfileForId(item.botProfileId)
+            : profileForLegacyLevel(item.botLevel)
           if (storedWithReviewKey !== item) {
             setLibrary((current) => current.map((stored) => stored.id === item.id
               ? { ...stored, reviewKey: canonicalReviewKey }
@@ -1768,10 +1884,52 @@ export default function App() {
             restoredTermination?.result ?? gameResult(next),
             next.isGameOver() || Boolean(restoredTermination),
           )
-          navigateTo(destination); setNotice(destination === 'review' ? 'Saved game opened in Review.' : 'Saved game loaded for viewing.')
-        },
-      )
-    } catch { setNotice('Saved PGN is invalid.') }
+          setReviewSource(null)
+          navigateTo('play'); setNotice('Saved game loaded for viewing.')
+        } catch { setNotice('Saved PGN is invalid.') }
+      },
+    )
+  }
+
+  const openLibraryGame = (summary: StoredGameSummary, destination: 'play' | 'review') => {
+    const requestVersion = ++libraryDetailRequestVersion.current
+    setOpeningLibraryGameId(summary.id)
+    setLibraryActionError(null)
+
+    let request: Promise<StoredGame | null>
+    if (database && databaseReady) {
+      request = database.loadGame(summary.id)
+    } else if (!database) {
+      try {
+        request = getLibraryDetailClient().load(readBrowserLibraryRawStrict(), summary.id)
+      } catch (error) {
+        setOpeningLibraryGameId(null)
+        setLibraryActionError(error instanceof Error ? error.message : 'Couldn’t open that saved game.')
+        return
+      }
+    } else {
+      setOpeningLibraryGameId(null)
+      setLibraryActionError('Your private game database is still preparing. Please try again in a moment.')
+      return
+    }
+
+    void request
+      .then((item) => {
+        if (requestVersion !== libraryDetailRequestVersion.current) return
+        if (!item) {
+          setLibraryActionError('That saved game is no longer available on this device.')
+          return
+        }
+        if (destination === 'review') reviewStored(item)
+        else openStored(item)
+      })
+      .catch((error: unknown) => {
+        if (requestVersion !== libraryDetailRequestVersion.current) return
+        setLibraryActionError(error instanceof Error ? error.message : 'Couldn’t open that saved game.')
+      })
+      .finally(() => {
+        if (requestVersion === libraryDetailRequestVersion.current) setOpeningLibraryGameId(null)
+      })
   }
 
   const onWindowKeyDown = useEffectEvent((event: KeyboardEvent) => {
@@ -1877,7 +2035,7 @@ export default function App() {
           // browser history to migrate. Confirm every required mirror before
           // mutating SQLite: an inaccessible Worker/store must leave this
           // migration retryable, never import an old library as an empty one.
-          const browserLibrary = await hydrateBrowserLibrary()
+          const browserLibrary = await hydrateBrowserLibraryForMigration()
           if (cancelled) return
           browserRetries = await hydrateTrainingRetryHistory()
           if (cancelled) return
@@ -1963,7 +2121,7 @@ export default function App() {
       }
     })()
     return () => { cancelled = true }
-  }, [database, hydrateBrowserLibrary, hydrateBrowserTacticsHistory, hydrateTrainingRetryHistory, reportDatabaseError, setGame])
+  }, [database, hydrateBrowserLibraryForMigration, hydrateBrowserTacticsHistory, hydrateTrainingRetryHistory, reportDatabaseError, setGame])
 
   useEffect(() => {
     if (desktop || tab !== 'train') return
@@ -1989,6 +2147,9 @@ export default function App() {
     libraryHistoryHydration.current = null
     libraryHydrationClient.current?.dispose()
     libraryHydrationClient.current = null
+    libraryDetailRequestVersion.current += 1
+    libraryDetailClient.current?.dispose()
+    libraryDetailClient.current = null
     tacticsHistoryRequestVersion.current += 1
     tacticsHistoryHydration.current = null
     tacticsHydrationClient.current?.dispose()
@@ -2091,11 +2252,12 @@ export default function App() {
       ...(mode === 'bot' ? { humanColor, colorChoice } : {}),
     }
     if (database) {
-      setLibrary((current) => mergeLibraryGames(current, [item]))
+      setLibrary((current) => mergeLibraryGameSummaries(current, [toStoredGameSummary(item)]))
       if (databaseReady) void database.saveGame(item).catch(reportDatabaseError)
       else pendingNativeGameSaves.current = mergeLibraryGames(pendingNativeGameSaves.current, [item])
     } else {
-      setLibrary(saveGame(item))
+      saveGame(item)
+      setLibrary((current) => mergeLibraryGameSummaries(current, [toStoredGameSummary(item)]))
     }
     savedPosition.current = terminalFingerprint
   }, [game, startFen, verbose, mode, botLevel, botProfileId, humanColor, colorChoice, gameFinished, currentResult, sharePgn, history.length, timeControl, clock, termination, database, databaseReady, reportDatabaseError])
@@ -2315,7 +2477,15 @@ export default function App() {
               className={tab === id ? 'is-active' : ''}
               onPointerEnter={() => preloadWorkspace(id)}
               onFocus={() => preloadWorkspace(id)}
-              onClick={() => { preloadWorkspace(id); navigateTo(id) }}
+              onClick={() => {
+                preloadWorkspace(id)
+                // The global Review tab means "this game". A Library review
+                // remains resumable when a player leaves and returns through
+                // Library, but should not silently shadow a deliberate tab
+                // navigation from the live board.
+                if (id === 'review') setReviewSource(null)
+                navigateTo(id)
+              }}
             >
               <Icon size={21} strokeWidth={2} />
               <span>{label}</span>
@@ -2614,6 +2784,7 @@ export default function App() {
           <WorkspaceLoadBoundary label="Review">
             <Suspense fallback={<WorkspaceLoading label="Review" />}>
               <AnalysisWorkspace
+                key={reviewWorkspaceKey}
                 desktop={desktop}
                 // This is derived from the position rather than the visual
                 // `thinking` flag so Review cannot win the short race between a
@@ -2625,7 +2796,7 @@ export default function App() {
                   ? 'The live bot move has priority. Review starts as soon as it finishes.'
                   : 'Stockfish verification has priority. Review starts as soon as the local check finishes.'}
                 onReviewEngineStarting={releaseIdleBrowserRuntimeForReview}
-                currentPgn={sharePgn}
+                currentPgn={reviewPgn}
                 enginePath={engineSettings.enginePath}
                 threads={engineSettings.threads}
                 hashMb={engineSettings.hashMb}
@@ -2660,7 +2831,7 @@ export default function App() {
                 onSaveRetryItem={saveRetryItem}
                 onDeleteRetryItem={deleteRetryItem}
                 onBackToReview={returnToReview}
-                onOpenReview={() => navigateTo('review')}
+                onOpenReview={() => { setReviewSource(null); navigateTo('review') }}
               />
             </Suspense>
           </WorkspaceLoadBoundary>
@@ -2693,7 +2864,17 @@ export default function App() {
               {abortedGameCount > 0 && <button className="library-aborted-toggle" type="button" onClick={toggleAbortedGames}>
                 {showAbortedGames ? `Hide ${abortedGameCount} aborted game${abortedGameCount === 1 ? '' : 's'}` : `Show ${abortedGameCount} aborted game${abortedGameCount === 1 ? '' : 's'}`}
               </button>}
-              {visibleLibrary.length ? <LibraryResults games={visibleLibrary} revealCount={libraryRevealCount} onRevealMore={revealMoreLibrary} onReview={(item) => openStored(item, 'review')} onOpen={openStored} /> : <div className="empty-panel"><Library size={30} /><strong>No games match those filters</strong><span>Try clearing search or showing a different review status.</span></div>}
+              {visibleLibrary.length ? <>
+                <LibraryResults
+                  games={visibleLibrary}
+                  revealCount={libraryRevealCount}
+                  openingGameId={openingLibraryGameId}
+                  onRevealMore={revealMoreLibrary}
+                  onReview={(item) => openLibraryGame(item, 'review')}
+                  onOpen={(item) => openLibraryGame(item, 'play')}
+                />
+                {libraryActionError && <p className="notice" role="alert">{libraryActionError}</p>}
+              </> : <div className="empty-panel"><Library size={30} /><strong>No games match those filters</strong><span>Try clearing search or showing a different review status.</span></div>}
             </> : <div className="empty-panel"><Library size={30} /><strong>Your library is ready</strong><span>Finish a game and it will appear here automatically.</span></div>}
           </section>
         )}
@@ -2716,7 +2897,7 @@ export default function App() {
                 <InsightsDashboard
                   games={library}
                   onPlay={() => navigateTo('play')}
-                  onReviewGame={(item) => openStored(item, 'review')}
+                  onReviewGame={(item) => openLibraryGame(item, 'review')}
                 />
               </Suspense>
             </WorkspaceLoadBoundary>

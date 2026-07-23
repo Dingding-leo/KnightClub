@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
   LIBRARY_STORAGE_KEY,
+  isStoredGameSummary,
+  linkLibraryGameSummariesToReview,
+  linkLibraryGamesToReview,
   markLibraryGamesReviewed,
+  mergeLibraryGameSummaries,
   mergeLibraryGames,
   normalizeActiveSession,
   normalizeLibrary,
   parseBrowserLibraryRaw,
   readBrowserLibraryRaw,
   readBrowserLibraryRawStrict,
+  toStoredGameSummary,
 } from './gameStore'
 
 const validGame = {
@@ -100,6 +105,21 @@ describe('game library normalization', () => {
     ])
   })
 
+  it('keeps only render metadata in a stored-game summary', () => {
+    const summary = toStoredGameSummary({ ...validGame, reviewKey: '0123456789abcdef' })
+
+    expect(summary).not.toHaveProperty('pgn')
+    expect(isStoredGameSummary(summary)).toBe(true)
+    expect(isStoredGameSummary({ ...summary, pgn: 'must-not-enter-summary-state' })).toBe(false)
+  })
+
+  it('merges summary rows newest first without retaining PGN text', () => {
+    const oldSummary = toStoredGameSummary({ ...validGame, id: 'old', playedAt: '2026-07-20T00:00:00.000Z' })
+    const currentSummary = toStoredGameSummary({ ...validGame, id: 'current', playedAt: '2026-07-24T00:00:00.000Z', reviewed: true })
+
+    expect(mergeLibraryGameSummaries([oldSummary], [currentSummary])).toEqual([currentSummary, oldSummary])
+  })
+
   it('marks only matching precomputed review keys without touching a large library\'s PGNs', () => {
     const reviewKey = '0123456789abcdef'
     const games = Array.from({ length: 500 }, (_, index) => ({
@@ -119,6 +139,41 @@ describe('game library normalization', () => {
     expect(result.games[24]).toEqual({ ...games[24], reviewed: true })
     expect(result.games[499]).toBe(games[499])
     expect(result.games[0]).toBe(games[0])
+  })
+
+  it('links an explicitly reviewed legacy game without parsing its PGN', () => {
+    const reviewKey = '0123456789abcdef'
+    const games = [
+      { ...validGame, id: 'legacy-source', pgn: 'not-a-pgn', reviewed: false },
+      { ...validGame, id: 'matching-game', pgn: 'also-not-a-pgn', reviewKey, reviewed: false },
+      { ...validGame, id: 'untouched', pgn: 'still-not-a-pgn', reviewKey: 'fedcba9876543210', reviewed: false },
+    ]
+
+    const result = linkLibraryGamesToReview(games, reviewKey, 'legacy-source')
+
+    expect(result.changedGames).toEqual([
+      { ...games[0], reviewKey, reviewed: true },
+      { ...games[1], reviewed: true },
+    ])
+    expect(result.games[0]).toEqual({ ...games[0], reviewKey, reviewed: true })
+    expect(result.games[1]).toEqual({ ...games[1], reviewed: true })
+    expect(result.games[2]).toBe(games[2])
+  })
+
+  it('links review metadata for summaries without reintroducing PGN strings', () => {
+    const reviewKey = '0123456789abcdef'
+    const summaries = [
+      toStoredGameSummary({ ...validGame, id: 'source', pgn: 'large-pgn-should-not-survive' }),
+      toStoredGameSummary({ ...validGame, id: 'other', reviewKey }),
+    ]
+
+    const result = linkLibraryGameSummariesToReview(summaries, reviewKey, 'source')
+
+    expect(result.games).toEqual([
+      { ...summaries[0], reviewKey, reviewed: true },
+      { ...summaries[1], reviewed: true },
+    ])
+    expect(JSON.stringify(result.games)).not.toContain('large-pgn-should-not-survive')
   })
 })
 

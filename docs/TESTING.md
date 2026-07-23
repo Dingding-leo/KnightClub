@@ -1,5 +1,7 @@
 # Testing
 
+**Latest saved-library responsiveness evidence (2026-07-23):** lint and typecheck passed; the frontend suite passed with 69 files / 417 tests; `cargo test --manifest-path src-tauri/Cargo.toml` passed with 47 tests. Browser-worker contracts prove a summary hydration result rejects PGN-bearing rows and returns one full record only for an explicit selected-game request; database contracts prove native summary IPC omits `pgn`, a selected detail round-trips and corrupt detail rows fail closed. Saved-review metadata contracts cover legacy source linking without parsing notation. This is automated evidence, not a manual large-library browser or packaged-desktop walkthrough.
+
 ## Fast deterministic suite
 
 ```bash

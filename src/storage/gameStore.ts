@@ -44,6 +44,13 @@ export interface StoredGame {
   colorChoice?: ColorChoice
 }
 
+/**
+ * Library and Insights never need move text to render a row or calculate a
+ * record. Keep their long-lived state to this small envelope and fetch a full
+ * game only after a player explicitly opens or reviews it.
+ */
+export type StoredGameSummary = Omit<StoredGame, 'pgn'>
+
 /** Minimal browser-storage surface needed to read the legacy game library. */
 export interface LibraryStorage {
   getItem(key: string): string | null
@@ -108,20 +115,43 @@ export function hasValidBotProfileField(value: unknown): value is { botProfileId
   return profile.botProfileId === undefined || isBotProfileId(profile.botProfileId)
 }
 
-function isStoredGame(value: unknown): value is StoredGame {
+function hasStoredGameSummaryFields(
+  value: unknown,
+  rejectFullPgn = false,
+): value is StoredGameSummary {
   if (!value || typeof value !== 'object') return false
-  const game = value as Partial<StoredGame>
+  // Reject accidental full records at the summary boundary. This is both a
+  // performance contract (do not retain PGN text in Library state) and a
+  // useful guard against a malformed native/Worker response.
+  if (rejectFullPgn && Object.prototype.hasOwnProperty.call(value, 'pgn')) return false
+  const game = value as Partial<StoredGameSummary>
   return typeof game.id === 'string' && game.id.length > 0 && game.id.length <= 512
     && typeof game.playedAt === 'string' && game.playedAt.length <= 512
     && (game.mode === 'bot' || game.mode === 'local')
     && typeof game.result === 'string' && game.result.length <= 32
-    && typeof game.pgn === 'string' && game.pgn.length <= 524_288
     && typeof game.finalFen === 'string' && game.finalFen.length > 0 && game.finalFen.length <= 1_024
     && Number.isInteger(game.moveCount) && Number(game.moveCount) >= 0 && Number(game.moveCount) <= 100_000
     && (game.reviewed === undefined || typeof game.reviewed === 'boolean')
     && (game.reviewKey === undefined || (typeof game.reviewKey === 'string' && /^[0-9a-f]{16}$/.test(game.reviewKey)))
     && hasValidPlayerSideFields(game)
     && hasValidBotProfileField(game)
+}
+
+function isStoredGame(value: unknown): value is StoredGame {
+  if (!hasStoredGameSummaryFields(value)) return false
+  const game = value as Partial<StoredGame>
+  return typeof game.pgn === 'string' && game.pgn.length <= 524_288
+}
+
+/** Public boundary for native summary IPC and the browser hydration Worker. */
+export function isStoredGameSummary(value: unknown): value is StoredGameSummary {
+  return hasStoredGameSummaryFields(value, true)
+}
+
+/** Drops the one field that Library/Insights must not retain between visits. */
+export function toStoredGameSummary(game: StoredGame): StoredGameSummary {
+  const { pgn: _pgn, ...summary } = game
+  return summary
 }
 
 function isActiveSession(value: unknown): value is ActiveSession {
@@ -156,11 +186,74 @@ export function mergeLibraryGames(
     .slice(0, MAX_GAMES)
 }
 
+/**
+ * The summary analogue of `mergeLibraryGames`. Retain newer local review
+ * metadata over a late database/browser response without keeping PGN strings
+ * alive in the Library workspace.
+ */
+export function mergeLibraryGameSummaries(
+  nativeGames: readonly StoredGameSummary[],
+  currentGames: readonly StoredGameSummary[],
+): StoredGameSummary[] {
+  const byId = new Map<string, StoredGameSummary>()
+  for (const game of nativeGames) byId.set(game.id, game)
+  for (const game of currentGames) byId.set(game.id, game)
+  return [...byId.values()]
+    .sort((left, right) => right.playedAt.localeCompare(left.playedAt) || right.id.localeCompare(left.id))
+    .slice(0, MAX_GAMES)
+}
+
 export interface MarkLibraryReviewedResult {
   /** Keeps non-matching records referentially stable for memoized Library views. */
   games: StoredGame[]
   /** Only records whose visible review status actually changed. */
   changedGames: StoredGame[]
+}
+
+export interface MarkLibrarySummaryReviewedResult {
+  /** Keeps non-matching summaries referentially stable for memoized views. */
+  games: StoredGameSummary[]
+  /** Only summaries whose visible review metadata changed. */
+  changedGames: StoredGameSummary[]
+}
+
+/**
+ * Links one explicitly opened library game to a completed review, while also
+ * reflecting any other records that already carry the same canonical review
+ * key. This stays entirely metadata-only: no stored PGN is opened or parsed
+ * just to update Library's visible review state.
+ */
+export function linkLibraryGamesToReview(
+  games: readonly StoredGame[],
+  reviewKey: string,
+  sourceGameId?: string,
+): MarkLibraryReviewedResult {
+  const changedGames: StoredGame[] = []
+  const nextGames = games.map((game) => {
+    if (game.reviewKey !== reviewKey && game.id !== sourceGameId) return game
+    if (game.reviewKey === reviewKey && game.reviewed) return game
+    const next = { ...game, reviewKey, reviewed: true }
+    changedGames.push(next)
+    return next
+  })
+  return { games: nextGames, changedGames }
+}
+
+/** Summary-only version used after a Review completes. */
+export function linkLibraryGameSummariesToReview(
+  games: readonly StoredGameSummary[],
+  reviewKey: string,
+  sourceGameId?: string,
+): MarkLibrarySummaryReviewedResult {
+  const changedGames: StoredGameSummary[] = []
+  const nextGames = games.map((game) => {
+    if (game.reviewKey !== reviewKey && game.id !== sourceGameId) return game
+    if (game.reviewKey === reviewKey && game.reviewed) return game
+    const next = { ...game, reviewKey, reviewed: true }
+    changedGames.push(next)
+    return next
+  })
+  return { games: nextGames, changedGames }
 }
 
 /**
@@ -172,14 +265,7 @@ export function markLibraryGamesReviewed(
   games: readonly StoredGame[],
   reviewKey: string,
 ): MarkLibraryReviewedResult {
-  const changedGames: StoredGame[] = []
-  const nextGames = games.map((game) => {
-    if (game.reviewKey !== reviewKey || game.reviewed) return game
-    const next = { ...game, reviewed: true }
-    changedGames.push(next)
-    return next
-  })
-  return { games: nextGames, changedGames }
+  return linkLibraryGamesToReview(games, reviewKey)
 }
 
 function safeParse<T>(value: string | null, fallback: T): T {

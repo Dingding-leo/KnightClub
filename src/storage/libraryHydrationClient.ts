@@ -1,5 +1,5 @@
-import type { StoredGame } from './gameStore'
-import { hydrateLibrary } from './libraryHydration'
+import { isStoredGameSummary, type StoredGame, type StoredGameSummary } from './gameStore'
+import { hydrateLibraryFull, hydrateLibrarySummaries, loadLibraryGame } from './libraryHydration'
 import type {
   LibraryHydrationRequest,
   LibraryHydrationResponse,
@@ -17,12 +17,22 @@ export type LibraryHydrationWorkerFactory = () => LibraryHydrationWorkerLike
 type PendingRequest = {
   id: number
   request: LibraryHydrationRequest
-  resolve: (games: StoredGame[]) => void
+  resolve: (value: LibraryHydrationValue) => void
   reject: (reason: Error) => void
 }
 
+type LibraryHydrationValue = StoredGameSummary[] | StoredGame[] | StoredGame | null
+type LibraryHydrationInput =
+  | { type: 'hydrate-library-summaries'; raw: string | null }
+  | { type: 'hydrate-library-full'; raw: string | null }
+  | { type: 'load-library-game'; raw: string | null; gameId: string }
+
 function abortError(message: string): Error {
   return new DOMException(message, 'AbortError')
+}
+
+function isSummaryList(value: unknown): value is StoredGameSummary[] {
+  return Array.isArray(value) && value.length <= 500 && value.every(isStoredGameSummary)
 }
 
 function canUseWorker(): boolean {
@@ -61,19 +71,38 @@ export class LibraryHydrationClient {
   /**
    * Parses the supplied raw mirror in a Worker whenever possible. Restricted
    * runtimes use the same parser only after a macrotask, so the Library shell
-   * paints before any local JSON/PGN normalization fallback begins.
+   * paints before any local JSON/PGN normalization fallback begins. Only
+   * summary metadata crosses this boundary; PGN text stays in the raw mirror.
    */
-  hydrate(raw: string | null): Promise<StoredGame[]> {
+  hydrate(raw: string | null): Promise<StoredGameSummary[]> {
+    return this.request({ type: 'hydrate-library-summaries', raw }) as Promise<StoredGameSummary[]>
+  }
+
+  /** One-time desktop migration path; never used by the Library UI itself. */
+  hydrateFull(raw: string | null): Promise<StoredGame[]> {
+    return this.request({ type: 'hydrate-library-full', raw }) as Promise<StoredGame[]>
+  }
+
+  /**
+   * Resolves one full game only after an explicit Open or Review intent. It
+   * uses the same latest-wins worker/fallback contract as list hydration.
+   */
+  load(raw: string | null, gameId: string): Promise<StoredGame | null> {
+    return this.request({ type: 'load-library-game', raw, gameId }) as Promise<StoredGame | null>
+  }
+
+  private request(
+    input: LibraryHydrationInput,
+  ): Promise<LibraryHydrationValue> {
     if (this.disposed) {
       return Promise.reject(new Error('Library hydration client is disposed.'))
     }
 
     this.cancel('Superseded by a newer library hydration request.')
-    const request: LibraryHydrationRequest = {
-      type: 'hydrate-library',
+    const request = {
+      ...input,
       id: this.nextId++,
-      raw,
-    }
+    } as LibraryHydrationRequest
     return new Promise((resolve, reject) => {
       this.pending = { id: request.id, request, resolve, reject }
       this.ensureWorker()
@@ -134,7 +163,12 @@ export class LibraryHydrationClient {
       this.fallbackTimer = null
       if (!this.pending || this.pending.id !== request.id) return
       try {
-        this.finishSuccess(request.id, hydrateLibrary(request.raw))
+        const value = request.type === 'hydrate-library-summaries'
+          ? hydrateLibrarySummaries(request.raw)
+          : request.type === 'hydrate-library-full'
+            ? hydrateLibraryFull(request.raw)
+            : loadLibraryGame(request.raw, request.gameId)
+        this.finishSuccess(request.id, value)
       } catch (error) {
         this.finishError(
           request.id,
@@ -164,8 +198,23 @@ export class LibraryHydrationClient {
       this.finishError(response.id, new Error(response.message), worker)
       return
     }
-    if (response.type === 'library-hydration-result') {
+    if (response.type === 'library-summaries-result'
+      && pending.request.type === 'hydrate-library-summaries') {
+      if (!isSummaryList(response.games)) {
+        this.finishError(response.id, new Error('Library Worker returned an invalid summary list.'), worker)
+        return
+      }
       this.finishSuccess(response.id, response.games, worker)
+      return
+    }
+    if (response.type === 'library-games-result'
+      && pending.request.type === 'hydrate-library-full') {
+      this.finishSuccess(response.id, response.games, worker)
+      return
+    }
+    if (response.type === 'library-game-result'
+      && pending.request.type === 'load-library-game') {
+      this.finishSuccess(response.id, response.game, worker)
       return
     }
     this.finishError(pending.id, new Error('Library Worker returned an unexpected result.'), worker)
@@ -173,14 +222,14 @@ export class LibraryHydrationClient {
 
   private finishSuccess(
     id: number,
-    games: StoredGame[],
+    value: LibraryHydrationValue,
     worker?: LibraryHydrationWorkerLike,
   ): void {
     const pending = this.pending
     if (!pending || pending.id !== id) return
     this.pending = null
     if (worker) this.releaseWorker(worker)
-    pending.resolve(games)
+    pending.resolve(value)
   }
 
   private finishError(

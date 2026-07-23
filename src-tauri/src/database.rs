@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsString;
@@ -702,6 +702,22 @@ pub struct DatabaseRepository {
     connection: Connection,
 }
 
+/// The persisted `games` table deliberately duplicates the fields that are
+/// useful for sorting and filtering. Keep the database row and its JSON
+/// payload in lockstep when decoding so a partially-corrupt row is never
+/// returned as a plausible saved game.
+struct StoredGameRow {
+    id: String,
+    played_at: String,
+    mode: String,
+    result: String,
+    pgn: String,
+    final_fen: String,
+    move_count: u32,
+    reviewed: i64,
+    payload_json: String,
+}
+
 impl DatabaseRepository {
     pub fn open(path: &Path) -> Result<OpenDatabase, DatabaseError> {
         if let Some(parent) = path.parent() {
@@ -891,7 +907,72 @@ impl DatabaseRepository {
     }
 
     /// Decodes the bounded game library only for library-facing workspaces.
+    ///
+    /// This is retained for the legacy snapshot/list API, which intentionally
+    /// returns each complete PGN payload. New library screens should prefer
+    /// [`Self::list_game_summaries`] and fetch a single record with
+    /// [`Self::load_game`] only when it is opened.
     pub fn list_games(&self) -> Result<Vec<Value>, DatabaseError> {
+        self.list_game_payloads()?
+            .into_iter()
+            .map(|record| Ok(record.payload))
+            .collect()
+    }
+
+    /// Lists lightweight saved-game envelopes without their PGN text.
+    ///
+    /// The summary preserves the optional game metadata stored in the payload
+    /// (opponent, clocks, review key, and so on) while keeping a potentially
+    /// large move list out of the Tauri IPC response. Every source row is
+    /// validated before its PGN field is removed.
+    pub fn list_game_summaries(&self) -> Result<Vec<Value>, DatabaseError> {
+        self.list_game_payloads()?
+            .into_iter()
+            .map(|record| {
+                let mut payload = record.payload;
+                let Value::Object(fields) = &mut payload else {
+                    return Err(DatabaseError::Invalid(
+                        "stored game payload must be an object".into(),
+                    ));
+                };
+                fields.remove("pgn");
+                Ok(payload)
+            })
+            .collect()
+    }
+
+    /// Loads one complete, validated saved-game payload by ID.
+    pub fn load_game(&self, game_id: &str) -> Result<Option<Value>, DatabaseError> {
+        validate_text("game id", game_id, 1, MAX_SHORT_FIELD_BYTES)?;
+        self.connection
+            .query_row(
+                "SELECT id, played_at, mode, result, pgn, final_fen, move_count, reviewed, payload_json \
+                 FROM games WHERE id = ?1",
+                [game_id],
+                |row| {
+                    Ok(StoredGameRow {
+                        id: row.get(0)?,
+                        played_at: row.get(1)?,
+                        mode: row.get(2)?,
+                        result: row.get(3)?,
+                        pgn: row.get(4)?,
+                        final_fen: row.get(5)?,
+                        move_count: row.get(6)?,
+                        reviewed: row.get(7)?,
+                        payload_json: row.get(8)?,
+                    })
+                },
+            )
+            .optional()?
+            .map(decode_stored_game)
+            .transpose()
+            .map(|record| record.map(|game| game.payload))
+    }
+
+    /// Only fetches the JSON payload once per row. Selecting the duplicated
+    /// `pgn` table column here would roughly double SQLite's work for a long
+    /// library even though list responses are built from the canonical JSON.
+    fn list_game_payloads(&self) -> Result<Vec<StoredGameRecord>, DatabaseError> {
         let mut statement = self.connection.prepare(
             "SELECT reviewed, payload_json FROM games ORDER BY played_at DESC, id DESC LIMIT 500",
         )?;
@@ -900,20 +981,12 @@ impl DatabaseRepository {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })?
             .map(|item| {
-                let (reviewed, json) = item?;
-                if json.len() > MAX_GAME_BYTES {
-                    return Err(DatabaseError::Invalid(
-                        "stored game payload is too large".into(),
-                    ));
-                }
-                let mut record = StoredGameRecord::from_payload(serde_json::from_str(&json)?)?;
-                record.reviewed = reviewed != 0;
-                if let Value::Object(payload) = &mut record.payload {
-                    payload.insert("reviewed".into(), Value::Bool(record.reviewed));
-                }
-                Ok(record.payload)
+                item.map_err(DatabaseError::from)
+                    .and_then(|(reviewed, payload_json)| {
+                        decode_stored_game_payload(reviewed, payload_json)
+                    })
             })
-            .collect::<Result<Vec<_>, DatabaseError>>()
+            .collect()
     }
 
     fn game_count(&self) -> Result<u32, DatabaseError> {
@@ -955,6 +1028,7 @@ impl DatabaseRepository {
         }
         for game in &legacy.games {
             game.validate()?;
+            validate_game_payload_matches_record(game)?;
         }
         let transaction = self.connection.transaction()?;
         let count: i64 = transaction.query_row(PERSISTED_RECORD_COUNT_SQL, [], |row| row.get(0))?;
@@ -992,6 +1066,7 @@ impl DatabaseRepository {
 
     pub fn save_game(&mut self, game: &StoredGameRecord) -> Result<(), DatabaseError> {
         game.validate()?;
+        validate_game_payload_matches_record(game)?;
         let transaction = self.connection.transaction()?;
         upsert_game(&transaction, game)?;
         transaction.execute(
@@ -1608,6 +1683,84 @@ fn validate_optional_state(label: &str, value: Option<&Value>) -> Result<(), Dat
     Ok(())
 }
 
+/// Reject a caller-built record whose indexed database fields do not describe
+/// the JSON that will be returned to the client. `reviewed` predates the JSON
+/// field, so an absent payload flag remains valid and is canonicalized from
+/// the database column when read.
+fn validate_game_payload_matches_record(record: &StoredGameRecord) -> Result<(), DatabaseError> {
+    let payload_record = StoredGameRecord::from_payload(record.payload.clone())?;
+    if payload_record.id != record.id
+        || payload_record.played_at != record.played_at
+        || payload_record.mode != record.mode
+        || payload_record.result != record.result
+        || payload_record.pgn != record.pgn
+        || payload_record.final_fen != record.final_fen
+        || payload_record.move_count != record.move_count
+    {
+        return Err(DatabaseError::Invalid(
+            "saved game fields do not match their payload".into(),
+        ));
+    }
+    if let Some(payload_reviewed) = record.payload.get("reviewed") {
+        if payload_reviewed.as_bool() != Some(record.reviewed) {
+            return Err(DatabaseError::Invalid(
+                "saved game review status does not match its payload".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn decode_stored_game(row: StoredGameRow) -> Result<StoredGameRecord, DatabaseError> {
+    let record = decode_stored_game_payload(row.reviewed, row.payload_json)?;
+    if record.id != row.id
+        || record.played_at != row.played_at
+        || record.mode != row.mode
+        || record.result != row.result
+        || record.pgn != row.pgn
+        || record.final_fen != row.final_fen
+        || record.move_count != row.move_count
+    {
+        return Err(DatabaseError::Invalid(
+            "stored game fields do not match their payload".into(),
+        ));
+    }
+    Ok(record)
+}
+
+fn decode_stored_game_payload(
+    reviewed: i64,
+    payload_json: String,
+) -> Result<StoredGameRecord, DatabaseError> {
+    if payload_json.len() > MAX_GAME_BYTES {
+        return Err(DatabaseError::Invalid(
+            "stored game payload is too large".into(),
+        ));
+    }
+    let persisted_reviewed = match reviewed {
+        0 => false,
+        1 => true,
+        _ => {
+            return Err(DatabaseError::Invalid(
+                "stored game review status is invalid".into(),
+            ));
+        }
+    };
+    let mut record = StoredGameRecord::from_payload(serde_json::from_str(&payload_json)?)?;
+    if let Some(payload_reviewed) = record.payload.get("reviewed") {
+        if payload_reviewed.as_bool() != Some(persisted_reviewed) {
+            return Err(DatabaseError::Invalid(
+                "stored game review status does not match its payload".into(),
+            ));
+        }
+    }
+    record.reviewed = persisted_reviewed;
+    if let Value::Object(payload) = &mut record.payload {
+        payload.insert("reviewed".into(), Value::Bool(record.reviewed));
+    }
+    Ok(record)
+}
+
 fn write_state(
     transaction: &Transaction<'_>,
     key: &str,
@@ -1966,6 +2119,27 @@ pub fn database_list_games(state: State<'_, DatabaseState>) -> Result<Vec<Value>
     state
         .lock()?
         .list_games()
+        .map_err(|error| error.to_string())
+}
+
+/// Returns saved-game metadata without PGN text. Use `database_load_game`
+/// once the player chooses a specific Library or Insights item.
+#[tauri::command]
+pub fn database_list_game_summaries(state: State<'_, DatabaseState>) -> Result<Vec<Value>, String> {
+    state
+        .lock()?
+        .list_game_summaries()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn database_load_game(
+    state: State<'_, DatabaseState>,
+    game_id: String,
+) -> Result<Option<Value>, String> {
+    state
+        .lock()?
+        .load_game(&game_id)
         .map_err(|error| error.to_string())
 }
 

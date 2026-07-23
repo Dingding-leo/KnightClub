@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Chess } from 'chess.js'
 import { DatabaseClient, type DatabaseBootstrap, type DatabaseSnapshot } from './databaseClient'
-import { DEFAULT_PREFERENCES, type ActiveSession, type StoredGame } from './gameStore'
+import { DEFAULT_PREFERENCES, toStoredGameSummary, type ActiveSession, type StoredGame } from './gameStore'
 import { createPersistedReview } from '../review/reviewPersistence'
 import { createPgnTimeline } from '../analysis/analysisModel'
 import type { GameReview } from '../review/gameReviewRunner'
@@ -140,10 +140,13 @@ describe('DatabaseClient', () => {
   })
 
   it('uses task-specific commands and camelCase payloads', async () => {
+    const summaries = snapshot.games.map(toStoredGameSummary)
     const invoke = vi.fn(async (command: string) => {
       if (command === 'database_snapshot') return snapshot
       if (command === 'database_bootstrap') return bootstrap
       if (command === 'database_list_games') return snapshot.games
+      if (command === 'database_list_game_summaries') return summaries
+      if (command === 'database_load_game') return snapshot.games[0]
       if (command === 'database_load_review') return review
       if (command === 'database_load_retry_item') return retry
       if (command === 'database_list_retry_items') return [retry]
@@ -157,6 +160,8 @@ describe('DatabaseClient', () => {
     await expect(client.snapshot()).resolves.toEqual(snapshot)
     await expect(client.bootstrap()).resolves.toEqual(bootstrap)
     await expect(client.listGames()).resolves.toEqual(snapshot.games)
+    await expect(client.listGameSummaries()).resolves.toEqual(summaries)
+    await expect(client.loadGame(snapshot.games[0].id)).resolves.toEqual(snapshot.games[0])
     await client.importLegacy({ activeSession: null, preferences: snapshot.preferences, games: snapshot.games })
     await client.saveActiveSession(snapshot.activeSession!)
     await client.savePreferences(snapshot.preferences!)
@@ -177,6 +182,8 @@ describe('DatabaseClient', () => {
       ['database_snapshot'],
       ['database_bootstrap'],
       ['database_list_games'],
+      ['database_list_game_summaries'],
+      ['database_load_game', { gameId: snapshot.games[0].id }],
       ['database_import_legacy', { legacy: { activeSession: null, preferences: snapshot.preferences, games: snapshot.games } }],
       ['database_save_active_session', { activeSession: snapshot.activeSession }],
       ['database_save_preferences', { preferences: snapshot.preferences }],
@@ -413,6 +420,13 @@ describe('DatabaseClient', () => {
 
     const duplicateGames = new DatabaseClient(vi.fn(async () => [snapshot.games[0], snapshot.games[0]]))
     await expect(duplicateGames.listGames()).rejects.toThrow('duplicate saved games')
+
+    const malformedSummaries = new DatabaseClient(vi.fn(async () => [{ ...toStoredGameSummary(snapshot.games[0]), id: '' }]))
+    await expect(malformedSummaries.listGameSummaries()).rejects.toThrow('invalid game library')
+
+    const missing = new DatabaseClient(vi.fn(async () => null))
+    await expect(missing.loadGame(snapshot.games[0].id)).resolves.toBeNull()
+    await expect(missing.loadGame('')).rejects.toThrow('Saved game ID is invalid')
   })
 
   it('preserves valid player-side data and rejects malformed values from native storage', async () => {

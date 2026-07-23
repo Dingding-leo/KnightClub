@@ -113,7 +113,9 @@ fn round_trips_state_and_keeps_legacy_import_atomic_and_idempotent() {
     let opened = DatabaseRepository::open(&directory.path().join("data.sqlite3")).unwrap();
     let mut repository = opened.repository;
     let legacy = LegacyImport {
-        active_session: Some(json!({ "pgn": "1. e4", "startFen": "start", "botProfileId": "rowan-pike" })),
+        active_session: Some(
+            json!({ "pgn": "1. e4", "startFen": "start", "botProfileId": "rowan-pike" }),
+        ),
         preferences: Some(json!({ "soundsEnabled": false, "botProfileId": "rowan-pike" })),
         games: vec![game("game-1")],
     };
@@ -191,6 +193,82 @@ fn bootstrap_defers_game_payload_decoding_until_the_library_is_opened() {
     assert_eq!(bootstrap.game_count, 1);
     assert!(!bootstrap.is_empty);
     assert!(repository.list_games().is_err());
+}
+
+#[test]
+fn game_summaries_omit_pgn_and_details_load_only_the_selected_game() {
+    let directory = tempfile::tempdir().unwrap();
+    let opened = DatabaseRepository::open(&directory.path().join("game-summary.sqlite3")).unwrap();
+    let mut repository = opened.repository;
+    let mut saved = game("game-1");
+    saved.reviewed = true;
+    saved.payload["reviewed"] = json!(true);
+    saved.payload["botProfileId"] = json!("rowan-pike");
+    repository.save_game(&saved).unwrap();
+
+    let summaries = repository.list_game_summaries().unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0]["id"], "game-1");
+    assert_eq!(summaries[0]["botProfileId"], "rowan-pike");
+    assert_eq!(summaries[0]["reviewed"], true);
+    assert!(summaries[0].get("pgn").is_none());
+
+    assert_eq!(repository.load_game("missing-game").unwrap(), None);
+    assert_eq!(repository.load_game("game-1").unwrap(), Some(saved.payload));
+    assert!(repository.load_game("").is_err());
+}
+
+#[test]
+fn game_detail_read_rejects_mismatched_persisted_columns() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("corrupt-game-row.sqlite3");
+    {
+        let opened = DatabaseRepository::open(&path).unwrap();
+        let mut repository = opened.repository;
+        repository.save_game(&game("game-1")).unwrap();
+    }
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE games SET pgn = '1. d4 d5 1/2-1/2' WHERE id = 'game-1'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let opened = DatabaseRepository::open(&path).unwrap();
+    let repository = opened.repository;
+    // The listing is still safe because it is built from the validated JSON
+    // payload and deliberately excludes the corrupt PGN column. Opening this
+    // one record detects the mismatch before it reaches the UI.
+    assert!(repository.list_game_summaries().is_ok());
+    assert!(repository.load_game("game-1").is_err());
+}
+
+#[test]
+fn game_summary_and_detail_reads_reject_corrupt_payloads() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("corrupt-game-payload.sqlite3");
+    {
+        let opened = DatabaseRepository::open(&path).unwrap();
+        let mut repository = opened.repository;
+        repository.save_game(&game("game-1")).unwrap();
+    }
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE games SET payload_json = '{\"id\": \"game-1\"}' WHERE id = 'game-1'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let opened = DatabaseRepository::open(&path).unwrap();
+    let repository = opened.repository;
+    assert!(repository.list_game_summaries().is_err());
+    assert!(repository.load_game("game-1").is_err());
 }
 
 #[test]
