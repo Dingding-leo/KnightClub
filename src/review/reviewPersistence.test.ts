@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Chess } from 'chess.js'
 import { createPgnTimeline } from '../analysis/analysisModel'
 import type { GameReview } from './gameReviewRunner'
@@ -40,6 +40,10 @@ function report(): GameReview {
   }
 }
 
+function browserReviewKey(index: number): string {
+  return index.toString(16).padStart(16, '0')
+}
+
 describe('persisted review identity and browser storage', () => {
   it('uses the same stable key for equivalent PGNs and a distinct key for a changed main line', () => {
     const first = createPgnTimeline('[Event "A"]\n\n1. e4 e5 2. Nf3 Nc6 *')
@@ -74,8 +78,55 @@ describe('persisted review identity and browser storage', () => {
     const record = createPersistedReview(timeline, report())
     saveBrowserReview(record, storage)
     expect(loadBrowserReview(record.reviewKey, storage)).toEqual(record)
+
+    const exposed = loadBrowserReview(record.reviewKey, storage)!
+    exposed.report.moves[0]!.feedback = 'A caller mutation must not alter the cached review.'
+    expect(loadBrowserReview(record.reviewKey, storage)).toEqual(record)
+
     storage.setItem('knightclub.review-reports.v1', JSON.stringify([{ reviewKey: record.reviewKey }]))
     expect(loadBrowserReview(record.reviewKey, storage)).toBeNull()
+  })
+
+  it('falls through a corrupt newer duplicate and removes every duplicate on save', () => {
+    const storage = new MemoryStorage()
+    const valid = createPersistedReview(createPgnTimeline('1. e4'), report(), '2026-07-22T00:00:00.000Z')
+    const corruptNewer = JSON.parse(JSON.stringify(valid)) as typeof valid
+    corruptNewer.reviewedAt = '2026-07-23T00:00:00.000Z'
+    corruptNewer.report.moves[0]!.to = 'd4'
+    storage.setItem('knightclub.review-reports.v1', JSON.stringify([corruptNewer, valid]))
+
+    // The newer envelope has the right shape but fails the source-line replay.
+    // A valid older duplicate remains available instead of being shadowed.
+    expect(loadBrowserReview(valid.reviewKey, storage)).toEqual(valid)
+
+    saveBrowserReview(valid, storage)
+    const persisted = JSON.parse(storage.getItem('knightclub.review-reports.v1') ?? '[]') as Array<typeof valid>
+    expect(persisted.filter((item) => item.reviewKey === valid.reviewKey)).toEqual([valid])
+  })
+
+  it('keeps a 500-review browser mirror off the historical PGN replay path', () => {
+    const storage = new MemoryStorage()
+    const incoming = createPersistedReview(createPgnTimeline('1. e4'), report())
+    const historical = Array.from({ length: 499 }, (_, index) => ({
+      ...incoming,
+      // These are syntactically valid legacy envelopes with intentionally
+      // mismatched identities.  They must never be exposed without a direct,
+      // fail-closed target validation, and must not all be replayed on save.
+      reviewKey: browserReviewKey(index),
+    }))
+    storage.setItem('knightclub.review-reports.v1', JSON.stringify(historical))
+
+    const move = vi.spyOn(Chess.prototype, 'move')
+    try {
+      saveBrowserReview(incoming, storage)
+      expect(loadBrowserReview(incoming.reviewKey, storage)).toEqual(incoming)
+      expect(JSON.parse(storage.getItem('knightclub.review-reports.v1') ?? '[]')).toHaveLength(500)
+      // One new write and its requested read replay only that source line.
+      // Replaying all 499 retained reports would be hundreds of calls here.
+      expect(move.mock.calls.length).toBeLessThan(20)
+    } finally {
+      move.mockRestore()
+    }
   })
 
   it('rejects incomplete, mismatched, or coach-unsafe report moves', () => {

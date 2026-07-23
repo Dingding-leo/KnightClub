@@ -34,7 +34,6 @@ import {
 } from 'lucide-react'
 import {
   createFenTimeline,
-  createPgnTimeline,
   evaluationForPerspective,
   formatAnalysisScore,
   uciPvToSan,
@@ -43,6 +42,10 @@ import {
   type EvaluationPerspective,
 } from '../analysis/analysisModel'
 import {
+  shouldParseInitialPgnInWorker,
+  TimelineWorkerClient,
+} from '../analysis/timelineWorkerClient'
+import {
   StockfishAnalysisClient,
   type AnalysisLine,
   type AnalysisResponse,
@@ -50,7 +53,7 @@ import {
 } from '../analysis/stockfishAnalysisClient'
 import { AmbientAnalysisCache } from '../analysis/ambientAnalysisCache'
 import { disposeAndClearClient, disposeClientIfCurrent } from '../analysis/clientLifecycle'
-import { readAnalysisFile } from '../analysis/fileImport'
+import { readAnalysisFileSource } from '../analysis/fileImport'
 import { createLatestRequestGate } from '../analysis/latestRequest'
 import { inertAnalysisBoardInteraction } from '../analysis/analysisBoardInteraction'
 import {
@@ -64,7 +67,7 @@ import {
   type VariationState,
 } from '../analysis/variationLine'
 import { copyText, downloadText } from '../domain/textTransfer'
-import { legalMovesFrom } from '../domain/chess'
+import { legalMovesFrom, STANDARD_START_FEN } from '../domain/chess'
 import { runGameReview, type GameReview, type ReviewProgress } from '../review/gameReviewRunner'
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { MoveClassification, ReviewedMove } from '../review/reviewModel'
@@ -83,7 +86,6 @@ import {
 } from '../review/playPreviewReviewTarget'
 import {
   createInitialWorkspaceState,
-  liveTimelineFor,
   type RequestedReviewTarget,
 } from '../review/reviewWorkspaceState'
 import {
@@ -116,6 +118,8 @@ interface AnalysisWorkspaceProps {
   /** Another local engine task has priority over optional review analysis. */
   engineBusy?: boolean
   engineBusyMessage?: string
+  /** Release an idle Play-only browser engine before an explicit full review. */
+  onFullReviewStarting?: () => void
   currentPgn: string
   enginePath: string | null
   threads: number
@@ -163,6 +167,11 @@ interface AnalysisMovePickerProps {
   moves: readonly AnalysisTimeline['moves'][number][]
   ply: number
   onSelectPly: (ply: number) => void
+}
+
+interface LiveTimelineSnapshot {
+  sourcePgn: string
+  timeline: AnalysisTimeline
 }
 
 export function ReviewSaveNotice({ saving }: { saving: boolean }) {
@@ -548,6 +557,7 @@ export function AnalysisWorkspace({
   desktop,
   engineBusy = false,
   engineBusyMessage,
+  onFullReviewStarting,
   currentPgn,
   enginePath,
   threads,
@@ -562,11 +572,16 @@ export function AnalysisWorkspace({
   requestedPlayPreviewTarget,
   onRequestedPlayPreviewTargetHandled,
 }: AnalysisWorkspaceProps) {
-  const [initialWorkspace] = useState(() => createInitialWorkspaceState(
-    currentPgn,
-    requestedReviewTarget,
-    requestedPlayPreviewTarget,
-  ))
+  // A normal game keeps the immediate Review-board handoff. Longer games
+  // paint a usable shell first and replay privately in a Worker below.
+  const initialPgnNeedsWorker = shouldParseInitialPgnInWorker(currentPgn)
+  const [initialWorkspace] = useState(() => initialPgnNeedsWorker
+    ? { timeline: createFenTimeline(STANDARD_START_FEN), ply: 0 }
+    : createInitialWorkspaceState(
+      currentPgn,
+      requestedReviewTarget,
+      requestedPlayPreviewTarget,
+    ))
   const [timeline, setTimeline] = useState(initialWorkspace.timeline)
   const [ply, setPly] = useState(initialWorkspace.ply)
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
@@ -586,6 +601,7 @@ export function AnalysisWorkspace({
   const [analysis, setAnalysis] = useState<DisplayAnalysis | null>(null)
   const [analysisError, setAnalysisError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [timelineLoading, setTimelineLoading] = useState(initialPgnNeedsWorker)
   const [review, setReview] = useState<GameReview | null>(null)
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress | null>(null)
   const [reviewRunning, setReviewRunning] = useState(false)
@@ -612,18 +628,27 @@ export function AnalysisWorkspace({
   const mounted = useRef(true)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const fileImportGate = useRef(createLatestRequestGate())
+  const timelineParseGate = useRef(createLatestRequestGate())
+  const liveTimelineGate = useRef(createLatestRequestGate())
+  const timelineParser = useRef<TimelineWorkerClient | null>(null)
+  const liveTimelineParser = useRef<TimelineWorkerClient | null>(null)
+  const initialTimelineParse = useRef(initialPgnNeedsWorker)
   const promotionChoiceRef = useRef<HTMLButtonElement | null>(null)
+  const normalizedCurrentPgn = useMemo(() => currentPgn.trim(), [currentPgn])
+  const [liveTimeline, setLiveTimeline] = useState<LiveTimelineSnapshot | null>(() => {
+    if (initialWorkspace.timeline.source !== 'pgn'
+      || initialWorkspace.timeline.sourcePgn !== currentPgn.trim()) return null
+    return { sourcePgn: initialWorkspace.timeline.sourcePgn, timeline: initialWorkspace.timeline }
+  })
 
   const position = timeline.positions[ply] ?? timeline.positions[0]
   const displayedPosition = variation?.position ?? position
   const boardGame = useMemo(() => new Chess(displayedPosition.fen), [displayedPosition.fen])
-  const liveTimeline = useMemo(
-    () => liveTimelineFor(currentPgn, timeline),
-    [currentPgn, timeline],
-  )
   const liveContinuation = useMemo(
-    () => liveGameContinuation(timeline, liveTimeline),
-    [liveTimeline, timeline],
+    () => liveTimeline && liveTimeline.sourcePgn === normalizedCurrentPgn
+      ? liveGameContinuation(timeline, liveTimeline.timeline)
+      : null,
+    [liveTimeline, normalizedCurrentPgn, timeline],
   )
   const positionTerminal = boardGame.isGameOver()
   const variationActive = variation !== null
@@ -660,7 +685,7 @@ export function AnalysisWorkspace({
   }, [review, reviewKey, timeline])
   const fullReviewAction = fullReviewActionFor({
     engineBusy,
-    reviewHydrating,
+    reviewHydrating: reviewHydrating || timelineLoading,
     hasReview: review !== null,
     moveCount: timeline.moves.length,
   })
@@ -713,6 +738,16 @@ export function AnalysisWorkspace({
   const isReviewRunCurrent = (version: number) => {
     return mounted.current && version === reviewRunVersion.current
   }
+
+  const getTimelineParser = useCallback(() => {
+    timelineParser.current ??= new TimelineWorkerClient()
+    return timelineParser.current
+  }, [])
+
+  const getLiveTimelineParser = useCallback(() => {
+    liveTimelineParser.current ??= new TimelineWorkerClient()
+    return liveTimelineParser.current
+  }, [])
 
   const clearVariationInteraction = useCallback(() => {
     setVariation(null)
@@ -828,7 +863,7 @@ export function AnalysisWorkspace({
   }, [clearVariationInteraction, variation])
 
   useEffect(() => {
-    if (!enabled || reviewRunning || positionTerminal || engineBusy) {
+    if (!enabled || reviewRunning || positionTerminal || engineBusy || timelineLoading) {
       client.current?.cancel()
       setLoading(false)
       setAnalysis(null)
@@ -894,21 +929,66 @@ export function AnalysisWorkspace({
       window.clearTimeout(timer)
       analysisClient.cancel()
     }
-  }, [desktop, displayedPosition.fen, effort, enabled, engineBusy, engineHashMb, enginePath, engineThreads, multiPv, positionTerminal, reviewRunning])
+  }, [desktop, displayedPosition.fen, effort, enabled, engineBusy, engineHashMb, enginePath, engineThreads, multiPv, positionTerminal, reviewRunning, timelineLoading])
 
   useEffect(() => {
     const importGate = fileImportGate.current
+    const parseGate = timelineParseGate.current
+    const liveGate = liveTimelineGate.current
     mounted.current = true
     return () => {
       mounted.current = false
       reviewRunVersion.current += 1
       importGate.invalidate()
+      parseGate.invalidate()
+      liveGate.invalidate()
       reviewAbort.current?.abort()
       disposeAndClearClient(client)
       disposeAndClearClient(reviewClient)
+      timelineParser.current?.dispose()
+      timelineParser.current = null
+      liveTimelineParser.current?.dispose()
+      liveTimelineParser.current = null
       reviewAbort.current = null
     }
   }, [])
+
+  // Live-game continuation is informative only, so never synchronously replay
+  // a newer PGN while the player is moving around Review. The active board
+  // remains available and the notice appears once the background comparison
+  // has a complete immutable timeline.
+  useEffect(() => {
+    const gate = liveTimelineGate.current
+    if (timelineLoading || !normalizedCurrentPgn) {
+      gate.invalidate()
+      liveTimelineParser.current?.cancel()
+      setLiveTimeline(null)
+      return
+    }
+    if (timeline.source === 'pgn' && timeline.sourcePgn === normalizedCurrentPgn) {
+      gate.invalidate()
+      liveTimelineParser.current?.cancel()
+      setLiveTimeline({ sourcePgn: normalizedCurrentPgn, timeline })
+      return
+    }
+
+    const requestId = gate.begin()
+    setLiveTimeline(null)
+    void getLiveTimelineParser().parsePgn(normalizedCurrentPgn)
+      .then((next) => {
+        if (!gate.isCurrent(requestId)) return
+        setLiveTimeline({ sourcePgn: normalizedCurrentPgn, timeline: next })
+      })
+      .catch((error: unknown) => {
+        if (!gate.isCurrent(requestId) || (error instanceof Error && error.name === 'AbortError')) return
+        setLiveTimeline(null)
+      })
+
+    return () => {
+      if (gate.isCurrent(requestId)) gate.invalidate()
+      liveTimelineParser.current?.cancel()
+    }
+  }, [getLiveTimelineParser, normalizedCurrentPgn, timeline, timelineLoading])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -984,7 +1064,8 @@ export function AnalysisWorkspace({
   }, [reviewKey, reviewStore, timeline.moves.length, timeline.startFen])
 
   useEffect(() => {
-    if (!requestedPlayPreviewTarget
+    if (timelineLoading
+      || !requestedPlayPreviewTarget
       || handledPlayPreviewTarget.current === requestedPlayPreviewTarget) return
 
     handledPlayPreviewTarget.current = requestedPlayPreviewTarget
@@ -995,17 +1076,21 @@ export function AnalysisWorkspace({
       if (targetPly !== null) selectMainlinePly(targetPly)
     }
     onRequestedPlayPreviewTargetHandled?.()
-  }, [onRequestedPlayPreviewTargetHandled, requestedPlayPreviewTarget, requestedReviewTarget, selectMainlinePly, timeline])
+  }, [onRequestedPlayPreviewTargetHandled, requestedPlayPreviewTarget, requestedReviewTarget, selectMainlinePly, timeline, timelineLoading])
 
   useEffect(() => {
     if (!requestedReviewTarget) return
     let cancelled = false
+    let activeParser: TimelineWorkerClient | null = null
+    const parseGate = timelineParseGate.current
     const target = requestedReviewTarget
     const targetVersion = ++reviewRunVersion.current
     reviewAbort.current?.abort()
     disposeAndClearClient(reviewClient)
     reviewAbort.current = null
     fileImportGate.current.invalidate()
+    const parseRequestId = parseGate.begin()
+    timelineParser.current?.cancel()
     // This queued navigation is a new user intent. Invalidate both a running
     // review and any earlier saved-review lookup before awaiting its source.
     reviewLoadVersion.current += 1
@@ -1014,6 +1099,7 @@ export function AnalysisWorkspace({
     setReviewSaving(false)
     setReviewProgress(null)
     setReviewError('')
+    setTimelineLoading(true)
 
     void (async () => {
       try {
@@ -1021,7 +1107,9 @@ export function AnalysisWorkspace({
         const record = await reviewStore.load(target.reviewKey)
         if (cancelled || !isReviewRunCurrent(targetVersion)) return
         if (!record) throw new Error('The saved source review is no longer available on this device.')
-        const restored = createPgnTimeline(record.sourcePgn)
+        activeParser = getTimelineParser()
+        const restored = await activeParser.parsePgn(record.sourcePgn)
+        if (cancelled || !isReviewRunCurrent(targetVersion) || !parseGate.isCurrent(parseRequestId)) return
         if (createReviewKey(restored) !== target.reviewKey
           || target.sourcePly < 1
           || target.sourcePly > restored.moves.length) {
@@ -1039,19 +1127,34 @@ export function AnalysisWorkspace({
         setReviewProgress(null)
         setReviewRunning(false)
         setReviewSaving(false)
+        // A successful explicit Training handoff owns the initial source. Do
+        // not later replay the transient current game over this restored view.
+        initialTimelineParse.current = false
       } catch (error) {
         if (!cancelled && isReviewRunCurrent(targetVersion)) {
+          // If the saved source cannot be restored, returning to the ordinary
+          // current game is safer than leaving a long initial mount at its
+          // temporary standard-board shell. A still-pending initial intent is
+          // intentionally left true so the effect below can retry after the
+          // parent clears this failed handoff.
           setReviewError(error instanceof Error ? error.message : 'The source review could not be opened.')
         }
       } finally {
-        if (!cancelled) onRequestedReviewTargetHandled?.()
+        if (!cancelled && isReviewRunCurrent(targetVersion) && parseGate.isCurrent(parseRequestId)) {
+          setTimelineLoading(false)
+          onRequestedReviewTargetHandled?.()
+        }
       }
     })()
 
-    return () => { cancelled = true }
-  }, [clearVariationInteraction, onRequestedReviewTargetHandled, requestedReviewTarget, reviewStore])
+    return () => {
+      cancelled = true
+      if (parseGate.isCurrent(parseRequestId)) parseGate.invalidate()
+      activeParser?.cancel()
+    }
+  }, [clearVariationInteraction, getTimelineParser, onRequestedReviewTargetHandled, requestedReviewTarget, reviewStore])
 
-  const stopFullReview = () => {
+  const stopFullReview = useCallback(() => {
     reviewRunVersion.current += 1
     reviewAbort.current?.abort()
     disposeAndClearClient(reviewClient)
@@ -1059,16 +1162,17 @@ export function AnalysisWorkspace({
     setReviewRunning(false)
     setReviewSaving(false)
     setReviewProgress(null)
-  }
+  }, [])
 
   const startFullReview = async () => {
-    if (!timeline.moves.length || reviewRunning || engineBusy || reviewHydrating) return
+    if (!timeline.moves.length || reviewRunning || engineBusy || reviewHydrating || timelineLoading) return
     if (timeline.moves.length > MAX_REVIEW_PLIES) {
       setReviewError(`Full-game review is limited to ${MAX_REVIEW_PLIES.toLocaleString()} plies. You can still browse this game and analyse any position.`)
       return
     }
     clearVariationInteraction()
     fileImportGate.current.invalidate()
+    onFullReviewStarting?.()
     // Browser ambient and full-review clients each own a Worker. Full review
     // intentionally pauses candidate lines, so release that idle WebAssembly
     // runtime before the heavier sequential job creates its own client.
@@ -1156,13 +1260,18 @@ export function AnalysisWorkspace({
     }
   }
 
-  const applyTimeline = (next: AnalysisTimeline) => {
+  const applyTimeline = useCallback((next: AnalysisTimeline) => {
     // Invalidate an older saved-review lookup before the new timeline renders.
     // The effect below will start its own lookup for `next`; this synchronous
     // fence prevents a just-resolved old report from flashing in between.
     reviewLoadVersion.current += 1
     clearVariationInteraction()
     stopFullReview()
+    // Any successfully applied source (initial, pasted, file or FEN) settles
+    // the transient mount intent. This deliberately happens only after a
+    // Worker result wins its request gate, so React StrictMode can retry a
+    // cancelled initial effect during development.
+    initialTimelineParse.current = false
     setTimeline(next)
     setPly(next.positions.length - 1)
     setImportError('')
@@ -1170,33 +1279,49 @@ export function AnalysisWorkspace({
     setReview(null)
     setReviewProgress(null)
     setReviewError('')
-  }
+  }, [clearVariationInteraction, stopFullReview])
+
+  const parsePgnInWorker = useCallback(async (
+    pgn: string,
+    successNotice: string | null,
+    onSuccess?: () => void,
+  ) => {
+    const requestId = timelineParseGate.current.begin()
+    timelineParser.current?.cancel()
+    setTimelineLoading(true)
+    setImportError('')
+    setImportNotice('Preparing this game locally…')
+    try {
+      const next = await getTimelineParser().parsePgn(pgn)
+      if (!timelineParseGate.current.isCurrent(requestId)) return
+      applyTimeline(next)
+      onSuccess?.()
+      if (successNotice) setImportNotice(successNotice)
+    } catch (error) {
+      if (!timelineParseGate.current.isCurrent(requestId)
+        || (error instanceof Error && error.name === 'AbortError')) return
+      setImportNotice('')
+      setImportError(error instanceof Error ? error.message : 'The game could not be loaded.')
+    } finally {
+      if (timelineParseGate.current.isCurrent(requestId)) setTimelineLoading(false)
+    }
+  }, [applyTimeline, getTimelineParser])
 
   const loadCurrentGame = () => {
     fileImportGate.current.invalidate()
-    try {
-      applyTimeline(createPgnTimeline(currentPgn))
-      setPgnInput(currentPgn)
-      setImportNotice('Current game loaded.')
-    } catch (error) {
-      setImportNotice('')
-      setImportError(error instanceof Error ? error.message : 'The current game could not be loaded.')
-    }
+    void parsePgnInWorker(currentPgn, 'Current game loaded.', () => setPgnInput(currentPgn))
   }
 
   const loadPgn = () => {
     fileImportGate.current.invalidate()
-    try {
-      applyTimeline(createPgnTimeline(pgnInput))
-      setImportNotice('PGN loaded.')
-    } catch (error) {
-      setImportNotice('')
-      setImportError(error instanceof Error ? error.message : 'Invalid PGN.')
-    }
+    void parsePgnInWorker(pgnInput, 'PGN loaded.')
   }
 
   const loadFen = () => {
     fileImportGate.current.invalidate()
+    timelineParseGate.current.invalidate()
+    timelineParser.current?.cancel()
+    setTimelineLoading(false)
     try {
       applyTimeline(createFenTimeline(fenInput))
       setImportNotice('FEN loaded.')
@@ -1213,26 +1338,59 @@ export function AnalysisWorkspace({
     if (!file) return
 
     const requestId = fileImportGate.current.begin()
+    // File.text() can be slow. Fence and terminate an older PGN replay before
+    // awaiting it so the older timeline never flashes over this new intent.
+    const parseRequestId = timelineParseGate.current.begin()
+    timelineParser.current?.cancel()
+    setTimelineLoading(true)
     setImportError('')
-    setImportNotice('')
-    const imported = await readAnalysisFile(file)
+    setImportNotice('Reading this file locally…')
+    const source = await readAnalysisFileSource(file)
     if (!fileImportGate.current.isCurrent(requestId)) return
-    if (!imported.ok) {
-      setImportError(imported.error)
+    if (!source.ok) {
+      setImportNotice('')
+      setImportError(source.error)
+      if (timelineParseGate.current.isCurrent(parseRequestId)) setTimelineLoading(false)
       return
     }
-    // The importer freezes its validated snapshot. The workspace treats a
-    // timeline as read-only, so the state boundary can safely retain it.
-    applyTimeline(imported.timeline as AnalysisTimeline)
-    if (imported.format === 'pgn') {
-      setPgnInput(imported.text)
-      setFenInput('')
-    } else {
-      setFenInput(imported.text)
-      setPgnInput('')
+    setImportNotice(`Preparing ${source.filename} locally…`)
+    try {
+      const imported = await getTimelineParser().importFile(source)
+      if (!fileImportGate.current.isCurrent(requestId) || !timelineParseGate.current.isCurrent(parseRequestId)) return
+      if (!imported.ok) {
+        setImportNotice('')
+        setImportError(imported.error)
+        return
+      }
+      // The Worker applies the same immutable parser boundary as the original
+      // importer, while keeping long PGN replay off the interaction thread.
+      applyTimeline(imported.timeline as AnalysisTimeline)
+      if (imported.format === 'pgn') {
+        setPgnInput(source.text)
+        setFenInput('')
+      } else {
+        setFenInput(source.text)
+        setPgnInput('')
+      }
+      setImportNotice(`${imported.filename} loaded.`)
+    } catch (error) {
+      if (!fileImportGate.current.isCurrent(requestId)
+        || !timelineParseGate.current.isCurrent(parseRequestId)
+        || (error instanceof Error && error.name === 'AbortError')) return
+      setImportNotice('')
+      setImportError(error instanceof Error ? error.message : 'The file could not be loaded.')
+    } finally {
+      if (timelineParseGate.current.isCurrent(parseRequestId)) setTimelineLoading(false)
     }
-    setImportNotice(`${imported.filename} loaded.`)
   }
+
+  useEffect(() => {
+    if (!initialTimelineParse.current || requestedReviewTarget) return
+    // Do not mark this ref complete until `applyTimeline` wins. React
+    // StrictMode intentionally cancels the first dev effect setup, and the
+    // second setup must be able to restart this long initial parse.
+    void parsePgnInWorker(currentPgn, null)
+  }, [currentPgn, parsePgnInWorker, requestedReviewTarget])
 
   const chooseAnalysisFile = () => fileInput.current?.click()
 
@@ -1368,7 +1526,9 @@ export function AnalysisWorkspace({
         <div className="analysis-board-heading">
           <div>
             <span className="eyebrow">Analysis board</span>
-            <strong>{timeline.source === 'pgn' ? `${timeline.moves.length} ply loaded` : 'Custom position'}</strong>
+            <strong>{timelineLoading
+              ? 'Preparing game locally…'
+              : timeline.source === 'pgn' ? `${timeline.moves.length} ply loaded` : 'Custom position'}</strong>
           </div>
           <button
             className="icon-button"
@@ -1389,6 +1549,8 @@ export function AnalysisWorkspace({
           onSquareClick={variation ? selectVariationSquare : inertAnalysisBoardInteraction.onSquareClick}
           onMoveAttempt={variation ? attemptVariationMove : inertAnalysisBoardInteraction.onMoveAttempt}
         />
+
+        {timelineLoading && <p className="analysis-notice" role="status">Preparing this game privately on your device. The current board stays available while it loads.</p>}
 
         {variation ? (
           <section className="analysis-variation" aria-label="Temporary variation">
@@ -1523,6 +1685,7 @@ export function AnalysisWorkspace({
             </div>
             <p>{desktop ? 'Native Stockfish runs locally without sending the game anywhere.' : 'Stockfish WebAssembly runs locally in this browser; the game never leaves this device.'}</p>
             {fullReviewOverPlyLimit && <p className="review-retained" role="status">Full-game review is limited to {MAX_REVIEW_PLIES.toLocaleString()} plies to keep this device responsive. You can still browse this game and analyse any position.</p>}
+            {timelineLoading && <p className="review-retained" role="status">Preparing the game before any full review can start…</p>}
             {engineBusy && <p className="review-retained" role="status">{engineBusyMessage ?? 'The live bot move has priority. Review starts as soon as it finishes.'}</p>}
             {reviewHydrating && <p className="review-retained" role="status">Checking this game for a saved review…</p>}
             <ReviewSaveNotice saving={reviewSaving} />

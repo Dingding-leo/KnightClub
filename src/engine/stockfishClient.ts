@@ -208,6 +208,17 @@ export class HybridEngineClient {
     this.fallback?.cancel()
   }
 
+  /**
+   * A full Review is an explicit, higher-cost browser task and is only allowed
+   * once Play is idle. Release Play's retained WebAssembly runtime so that
+   * review does not keep a second Stockfish Worker and hash allocation alive.
+   */
+  releaseIdleBrowserRuntime(): void {
+    if (this.disposed || this.desktop) return
+    this.browserStockfish?.dispose()
+    this.browserStockfish = null
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true

@@ -200,6 +200,27 @@ describe('analysis workspace convenience contracts', () => {
     expect(fullReviewMarkup).toMatch(/<button class="primary-button" type="button" disabled="">[\s\S]*?Review full game/)
   })
 
+  it('paints a responsive Review shell before a long game is replayed in a Worker', () => {
+    vi.stubGlobal('Worker', function TimelineWorker() {})
+    try {
+      const markup = renderToStaticMarkup(
+        <AnalysisWorkspace
+          desktop={false}
+          currentPgn={repeatedKnightPgn(MAX_REVIEW_PLIES + 1)}
+          enginePath={null}
+          threads={1}
+          hashMb={16}
+        />,
+      )
+
+      expect(markup).toContain('Preparing game locally…')
+      expect(markup).toContain('Preparing this game privately on your device. The current board stays available while it loads.')
+      expect(markup).not.toContain(`${MAX_REVIEW_PLIES + 1} ply loaded`)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('bounds long Review notation while pinning an early selected position', () => {
     const source = createPgnTimeline('1. e4 e5').moves
     const [white, black] = source

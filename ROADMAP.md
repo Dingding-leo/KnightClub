@@ -42,6 +42,7 @@
 
 - [x] Cancellable in-session per-move Stockfish analysis with reproducible settings
 - [x] 1,024-ply full-review resource cap with long-PGN numeric position jump
+- [x] Latest-wins Worker timeline preparation for long initial, pasted and file PGNs
 - [x] Local persistence for completed full-game reports, saved-report restoration and Library review linkage
 - [ ] Resumable or reusable review jobs with immutable engine fingerprints and position caching
 - [x] Nonlinear accuracy and expected-score model with documented formulae

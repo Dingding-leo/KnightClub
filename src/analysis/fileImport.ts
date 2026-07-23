@@ -61,6 +61,18 @@ export type AnalysisFileReadResult = AnalysisFileImportError | (AnalysisFileImpo
   readonly text: string
 })
 
+/**
+ * The bounded text source read from a picker before a parser is selected.
+ * Keeping this separate from `readAnalysisFile` lets the UI move the costly
+ * PGN replay into a dedicated Worker without weakening the file boundary.
+ */
+export type AnalysisFileSourceReadResult = AnalysisFileImportError | Readonly<{
+  ok: true
+  filename: string
+  text: string
+  size: number
+}>
+
 function filenameFor(input: AnalysisFileImportInput): string {
   return typeof input.filename === 'string' && input.filename.trim() ? input.filename.trim() : 'unnamed file'
 }
@@ -199,7 +211,7 @@ export function importAnalysisFile(input: AnalysisFileImportInput): AnalysisFile
  * allocate/read its text. `importAnalysisFile` repeats the byte check after
  * reading because a reported size must never be trusted on its own.
  */
-export async function readAnalysisFile(file: AnalysisFileReader): Promise<AnalysisFileReadResult> {
+export async function readAnalysisFileSource(file: AnalysisFileReader): Promise<AnalysisFileSourceReadResult> {
   const filename = filenameFor({ filename: file.name, text: '', size: file.size })
   if (!Number.isSafeInteger(file.size) || file.size < 0) {
     return errorResult(filename, 'invalid-file-size', 'The selected file reported an invalid size.')
@@ -209,9 +221,26 @@ export async function readAnalysisFile(file: AnalysisFileReader): Promise<Analys
   }
   try {
     const text = await file.text()
-    const imported = importAnalysisFile({ filename: file.name, text, size: file.size })
-    return imported.ok ? Object.freeze({ ...imported, text }) : imported
+    if (!text.trim()) return errorResult(filename, 'empty-file', 'Choose a non-empty PGN or FEN file.')
+    // File.size is authoritative for a picker, but the received UTF-8 text is
+    // still checked before it crosses the Worker boundary.
+    if (Math.max(file.size, new TextEncoder().encode(text).byteLength) > MAX_ANALYSIS_IMPORT_BYTES) {
+      return errorResult(filename, 'file-too-large', 'PGN and FEN imports must be 512 KiB or smaller.')
+    }
+    return Object.freeze({ ok: true, filename, text, size: file.size })
   } catch {
     return errorResult(filename, 'file-read-failed', `Couldn’t read ${filename}.`)
   }
+}
+
+/**
+ * Backwards-compatible convenience helper for callers that need a fully
+ * parsed immutable timeline in the current thread. The Review workspace uses
+ * `readAnalysisFileSource` plus its parser Worker instead.
+ */
+export async function readAnalysisFile(file: AnalysisFileReader): Promise<AnalysisFileReadResult> {
+  const source = await readAnalysisFileSource(file)
+  if (!source.ok) return source
+  const imported = importAnalysisFile(source)
+  return imported.ok ? Object.freeze({ ...imported, text: source.text }) : imported
 }

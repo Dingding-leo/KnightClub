@@ -37,6 +37,39 @@ export interface ReviewStorage {
 }
 
 /**
+ * A deliberately cheap shape for indexing browser storage.  It proves that a
+ * value can safely participate in replacement/sorting, but it does not replay
+ * its PGN or walk every reviewed move.  Only `loadBrowserReview` promotes an
+ * envelope to a real PersistedReview with `assertPersistedReview`.
+ */
+interface PersistedReviewEnvelope {
+  schemaVersion: typeof REVIEW_SCHEMA_VERSION
+  reviewKey: string
+  sourcePgn: string
+  startFen: string
+  moveCount: number
+  reviewedAt: string
+  report: unknown
+}
+
+interface CachedBrowserReviews {
+  /** Exact storage text which this private index was derived from. */
+  raw: string | null
+  /** Never expose unverified envelopes outside this module. */
+  items: readonly PersistedReviewEnvelope[]
+  /** Includes every same-key candidate so a corrupt newer duplicate cannot hide an older valid review. */
+  byKey: ReadonlyMap<string, readonly PersistedReviewEnvelope[]>
+}
+
+/**
+ * Review reports can each contain a long PGN.  Replaying every report on a
+ * normal save makes a 500-review library noticeably stall.  A raw-text keyed
+ * cache keeps only a private, shallow index; any direct localStorage rewrite
+ * invalidates it before a record can be used again.
+ */
+const browserReviewCache = new WeakMap<ReviewStorage, CachedBrowserReviews>()
+
+/**
  * The canonical review identity intentionally needs only the move facts that
  * define a chess main line. Callers that already own a verbose `chess.js`
  * history can therefore create the same key without reparsing its PGN.
@@ -149,6 +182,31 @@ function isGameReview(value: unknown): value is GameReview {
   return value.moves.every(isReviewedMove)
 }
 
+function isGameReviewEnvelope(value: unknown, moveCount: number): boolean {
+  if (!isObject(value)) return false
+  return isBoundedString(value.createdAt, 1, MAX_SHORT_TEXT)
+    && isBoundedString(value.engineName, 0, MAX_SHORT_TEXT)
+    && isBoundedString(value.enginePath, 0, 4_096)
+    && isBoundedNumber(value.totalElapsedMs, 0, MAX_REVIEW_PLIES * 20_000)
+    && Array.isArray(value.moves)
+    && value.moves.length === moveCount
+    && isObject(value.settings)
+    && isObject(value.summary)
+}
+
+function isPersistedReviewEnvelope(value: unknown): value is PersistedReviewEnvelope {
+  if (!isObject(value)
+    || value.schemaVersion !== REVIEW_SCHEMA_VERSION
+    || !isBoundedString(value.reviewKey, 16, 16)
+    || !REVIEW_KEY_PATTERN.test(value.reviewKey)
+    || !isBoundedString(value.sourcePgn, 1, MAX_PGN_BYTES)
+    || !isBoundedString(value.startFen, 1, MAX_FEN_BYTES)
+    || !isBoundedInteger(value.moveCount, 1, MAX_REVIEW_PLIES)
+    || !isBoundedString(value.reviewedAt, 1, MAX_SHORT_TEXT)) return false
+
+  return isGameReviewEnvelope(value.report, value.moveCount)
+}
+
 function matchesSourceTimeline(reviewedMoves: ReviewedMove[], timeline: AnalysisTimeline): boolean {
   return reviewedMoves.length === timeline.moves.length
     && reviewedMoves.every((reviewed, index) => {
@@ -252,32 +310,112 @@ function browserStorage(storage?: ReviewStorage): ReviewStorage | null {
   return typeof localStorage === 'undefined' ? null : localStorage
 }
 
-function loadBrowserReviews(storage?: ReviewStorage): PersistedReview[] {
-  const target = browserStorage(storage)
-  if (!target) return []
+function comparePersistedReviews(left: PersistedReviewEnvelope, right: PersistedReviewEnvelope): number {
+  return right.reviewedAt.localeCompare(left.reviewedAt)
+}
+
+function clonePersistedReview<T extends PersistedReviewEnvelope>(review: T): T {
+  // Browser storage contains JSON-compatible data.  Clone the one item that
+  // crosses the cache boundary so a caller cannot mutate the private index.
+  return JSON.parse(JSON.stringify(review)) as T
+}
+
+function parseBrowserReviewEnvelopes(raw: string | null): PersistedReviewEnvelope[] {
   try {
-    const parsed: unknown = JSON.parse(target.getItem(REVIEW_STORAGE_KEY) ?? '[]')
+    const parsed: unknown = JSON.parse(raw ?? '[]')
     if (!Array.isArray(parsed)) return []
     return parsed
-      .filter(isPersistedReview)
-      .sort((left, right) => right.reviewedAt.localeCompare(left.reviewedAt))
+      .filter(isPersistedReviewEnvelope)
+      .sort(comparePersistedReviews)
       .slice(0, MAX_PERSISTED_REVIEWS)
   } catch {
     return []
   }
 }
 
+function cacheBrowserReviewEnvelopes(
+  storage: ReviewStorage,
+  raw: string | null,
+  items: readonly PersistedReviewEnvelope[],
+): CachedBrowserReviews {
+  // All callers pass either JSON parsed from `raw` or a prior private cache
+  // plus a clone of the newly validated record.  A fresh array prevents a
+  // later caller-side array mutation from changing this snapshot.
+  const privateItems = [...items]
+  const byKey = new Map<string, PersistedReviewEnvelope[]>()
+  for (const item of privateItems) {
+    const candidates = byKey.get(item.reviewKey)
+    if (candidates) candidates.push(item)
+    else byKey.set(item.reviewKey, [item])
+  }
+  const cached: CachedBrowserReviews = { raw, items: privateItems, byKey }
+  browserReviewCache.set(storage, cached)
+  return cached
+}
+
+function readBrowserReviewSnapshot(storage: ReviewStorage): CachedBrowserReviews {
+  let raw: string | null = null
+  try {
+    raw = storage.getItem(REVIEW_STORAGE_KEY)
+  } catch {
+    // Match the previous fail-closed behaviour: an unreadable mirror behaves
+    // as empty, while a subsequent successful save can replace it.
+  }
+
+  const cached = browserReviewCache.get(storage)
+  if (cached && cached.raw === raw) return cached
+  return cacheBrowserReviewEnvelopes(storage, raw, parseBrowserReviewEnvelopes(raw))
+}
+
+function insertBrowserReview(
+  items: readonly PersistedReviewEnvelope[],
+  record: PersistedReview,
+): PersistedReviewEnvelope[] {
+  // Remove every duplicate legacy identity.  The binary insertion preserves
+  // the existing newest-first order without re-sorting a 500-review library.
+  const withoutExisting = items.filter((item) => item.reviewKey !== record.reviewKey)
+  const incoming = clonePersistedReview(record)
+  let start = 0
+  let end = withoutExisting.length
+  while (start < end) {
+    const middle = Math.floor((start + end) / 2)
+    if (comparePersistedReviews(incoming, withoutExisting[middle]!) <= 0) end = middle
+    else start = middle + 1
+  }
+  return [
+    ...withoutExisting.slice(0, start),
+    incoming,
+    ...withoutExisting.slice(start),
+  ].slice(0, MAX_PERSISTED_REVIEWS)
+}
+
+function findValidatedBrowserReview(
+  snapshot: CachedBrowserReviews,
+  reviewKey: string,
+): PersistedReview | null {
+  // A same-key duplicate can be malformed (or fail its PGN consistency
+  // check).  Validate each requested candidate fully and only return a record
+  // after its own source line has been replayed successfully.
+  for (const candidate of snapshot.byKey.get(reviewKey) ?? []) {
+    if (isPersistedReview(candidate)) return candidate
+  }
+  return null
+}
+
 export function saveBrowserReview(record: PersistedReview, storage?: ReviewStorage): void {
   assertPersistedReview(record)
   const target = browserStorage(storage)
   if (!target) throw new Error('Local review storage is unavailable.')
-  const next = [record, ...loadBrowserReviews(target).filter((item) => item.reviewKey !== record.reviewKey)]
-    .sort((left, right) => right.reviewedAt.localeCompare(left.reviewedAt))
-    .slice(0, MAX_PERSISTED_REVIEWS)
-  target.setItem(REVIEW_STORAGE_KEY, JSON.stringify(next))
+  const next = insertBrowserReview(readBrowserReviewSnapshot(target).items, record)
+  const serialized = JSON.stringify(next)
+  target.setItem(REVIEW_STORAGE_KEY, serialized)
+  cacheBrowserReviewEnvelopes(target, serialized, next)
 }
 
 export function loadBrowserReview(reviewKey: string, storage?: ReviewStorage): PersistedReview | null {
   if (!REVIEW_KEY_PATTERN.test(reviewKey)) return null
-  return loadBrowserReviews(storage).find((item) => item.reviewKey === reviewKey) ?? null
+  const target = browserStorage(storage)
+  if (!target) return null
+  const review = findValidatedBrowserReview(readBrowserReviewSnapshot(target), reviewKey)
+  return review ? clonePersistedReview(review) : null
 }

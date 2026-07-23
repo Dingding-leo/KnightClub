@@ -2220,6 +2220,7 @@ export default function App() {
                 engineBusyMessage={premoveWindow
                   ? 'The live bot move has priority. Review starts as soon as it finishes.'
                   : 'Stockfish verification has priority. Review starts as soon as the local check finishes.'}
+                onFullReviewStarting={() => botClient.current?.releaseIdleBrowserRuntime()}
                 currentPgn={sharePgn}
                 enginePath={engineSettings.enginePath}
                 threads={engineSettings.threads}

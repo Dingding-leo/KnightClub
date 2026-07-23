@@ -42,6 +42,21 @@ describe('Hybrid engine startup', () => {
     expect(worker).not.toHaveBeenCalled()
     client.dispose()
   })
+
+  it('releases an idle browser Stockfish runtime before a full review can allocate its own Worker', () => {
+    const client = new HybridEngineClient()
+    const dispose = vi.fn()
+    const internal = client as unknown as {
+      browserStockfish: { dispose: () => void } | null
+    }
+    internal.browserStockfish = { dispose }
+
+    client.releaseIdleBrowserRuntime()
+
+    expect(dispose).toHaveBeenCalledOnce()
+    expect(internal.browserStockfish).toBeNull()
+    client.dispose()
+  })
 })
 
 describe('UCI move parsing', () => {
