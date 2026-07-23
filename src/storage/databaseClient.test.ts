@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { Chess } from 'chess.js'
 import { DatabaseClient, type DatabaseBootstrap, type DatabaseSnapshot } from './databaseClient'
 import { DEFAULT_PREFERENCES, type ActiveSession, type StoredGame } from './gameStore'
 import { createPersistedReview } from '../review/reviewPersistence'
@@ -113,6 +114,31 @@ function sessionWithPgn(pgn: string): ActiveSession {
 }
 
 describe('DatabaseClient', () => {
+  it('skips replay only for trusted review snapshots and rejects tampered clones before native save', async () => {
+    const invoke = vi.fn(async () => undefined)
+    const client = new DatabaseClient(invoke)
+    const move = vi.spyOn(Chess.prototype, 'move')
+    try {
+      await client.saveReview(review)
+      expect(move).not.toHaveBeenCalled()
+      expect(invoke).toHaveBeenCalledWith('database_save_review', { review })
+
+      invoke.mockClear()
+      const cloned = JSON.parse(JSON.stringify(review)) as typeof review
+      await client.saveReview(cloned)
+      expect(move).toHaveBeenCalled()
+      expect(invoke).toHaveBeenCalledWith('database_save_review', { review: cloned })
+
+      invoke.mockClear()
+      const tampered = JSON.parse(JSON.stringify(review)) as typeof review
+      tampered.report.moves[0]!.to = 'd4'
+      await expect(client.saveReview(tampered)).rejects.toThrow('Saved review')
+      expect(invoke).not.toHaveBeenCalled()
+    } finally {
+      move.mockRestore()
+    }
+  })
+
   it('uses task-specific commands and camelCase payloads', async () => {
     const invoke = vi.fn(async (command: string) => {
       if (command === 'database_snapshot') return snapshot

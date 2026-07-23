@@ -1229,6 +1229,21 @@ struct ManagedEngine {
 }
 
 /**
+ * Play, Verify, and Review deliberately serialize access to one native UCI
+ * child. Keeping the mutex and optional supervisor in a separately clonable
+ * pool prevents a normal Play -> Review transition from retaining two
+ * Stockfish processes (and two Hash allocations) at once.
+ *
+ * Request cancellation remains state-specific: the pool owns only the scarce
+ * process resource, while `StockfishState` and `AnalysisState` retain their
+ * existing independent cancellation registries.
+ */
+#[derive(Clone, Default)]
+pub struct EnginePool {
+    engine: Arc<Mutex<Option<ManagedEngine>>>,
+}
+
+/**
  * A cancellation is an intentional, recoverable stop after a request has
  * already crossed its UCI ready fence. Keep that warm process so fast Review
  * navigation does not repeatedly spawn Stockfish or rebuild Hash. Every other
@@ -1246,12 +1261,18 @@ pub struct StockfishState {
     cancelled_through: Arc<AtomicU64>,
 }
 
-impl Default for StockfishState {
-    fn default() -> Self {
+impl StockfishState {
+    pub fn from_engine_pool(pool: &EnginePool) -> Self {
         Self {
-            engine: Arc::new(Mutex::new(None)),
+            engine: pool.engine.clone(),
             cancelled_through: Arc::new(AtomicU64::new(0)),
         }
+    }
+}
+
+impl Default for StockfishState {
+    fn default() -> Self {
+        Self::from_engine_pool(&EnginePool::default())
     }
 }
 
@@ -1320,12 +1341,18 @@ pub struct AnalysisState {
     cancelled_requests: Arc<Mutex<AnalysisCancellationRegistry>>,
 }
 
-impl Default for AnalysisState {
-    fn default() -> Self {
+impl AnalysisState {
+    pub fn from_engine_pool(pool: &EnginePool) -> Self {
         Self {
-            engine: Arc::new(Mutex::new(None)),
+            engine: pool.engine.clone(),
             cancelled_requests: Arc::new(Mutex::new(AnalysisCancellationRegistry::default())),
         }
+    }
+}
+
+impl Default for AnalysisState {
+    fn default() -> Self {
+        Self::from_engine_pool(&EnginePool::default())
     }
 }
 
@@ -1523,6 +1550,24 @@ mod tests {
                 hash_mb: 16,
             },
         }
+    }
+
+    #[test]
+    fn play_and_analysis_states_share_the_explicit_native_engine_pool() {
+        let pool = EnginePool::default();
+        let play = StockfishState::from_engine_pool(&pool);
+        let analysis = AnalysisState::from_engine_pool(&pool);
+
+        assert!(
+            Arc::ptr_eq(&play.engine, &analysis.engine),
+            "the desktop command states must serialize through one UCI supervisor"
+        );
+        record_play_cancellation(&play.cancelled_through, 12);
+        assert!(is_play_request_cancelled(12, &play.cancelled_through));
+        assert!(
+            !take_analysis_request_cancellation(12, analysis.cancelled_requests.as_ref()),
+            "sharing a process must not make a Play cancellation cancel Review"
+        );
     }
 
     #[test]

@@ -20,6 +20,14 @@ const REVIEW_CLASSIFICATIONS = new Set([
 ])
 const REVIEW_PHASES = new Set(['opening', 'middlegame', 'endgame'])
 
+/**
+ * Only snapshots created inside this module may bypass a second PGN replay at
+ * a persistence boundary.  Identity is deliberately part of the contract:
+ * JSON clones, native payloads, and caller-assembled objects must all use the
+ * strict validator below before they can be saved.
+ */
+const trustedPersistedReviewSnapshots = new WeakSet<object>()
+
 export interface PersistedReview {
   schemaVersion: typeof REVIEW_SCHEMA_VERSION
   reviewKey: string
@@ -267,8 +275,15 @@ export function createPersistedReview(timeline: AnalysisTimeline, report: GameRe
     reviewedAt,
     report,
   }
-  assertPersistedReview(record)
-  return record
+  // A completed review can contain hundreds of moves.  Detach it from the
+  // live analysis report before validating, then freeze the exact value that
+  // will cross the save boundary.  This lets the immediate save skip another
+  // expensive PGN replay without trusting any mutable caller-owned object.
+  const snapshot = clonePersistedReview(record)
+  assertPersistedReview(snapshot)
+  const immutableSnapshot = freezeRecursively(snapshot)
+  trustedPersistedReviewSnapshots.add(immutableSnapshot)
+  return immutableSnapshot
 }
 
 export function isPersistedReview(value: unknown): value is PersistedReview {
@@ -305,6 +320,17 @@ export function assertPersistedReview(value: unknown): asserts value is Persiste
   }
 }
 
+/**
+ * Preserve strict validation for every untrusted value while avoiding a
+ * duplicate chess.js replay for the immutable snapshot just produced by
+ * `createPersistedReview`.  The registry is private and identity-based, so a
+ * deserialized clone can never inherit this trust.
+ */
+export function assertPersistedReviewForSave(value: unknown): asserts value is PersistedReview {
+  if (isObject(value) && trustedPersistedReviewSnapshots.has(value)) return
+  assertPersistedReview(value)
+}
+
 function browserStorage(storage?: ReviewStorage): ReviewStorage | null {
   if (storage) return storage
   return typeof localStorage === 'undefined' ? null : localStorage
@@ -318,6 +344,12 @@ function clonePersistedReview<T extends PersistedReviewEnvelope>(review: T): T {
   // Browser storage contains JSON-compatible data.  Clone the one item that
   // crosses the cache boundary so a caller cannot mutate the private index.
   return JSON.parse(JSON.stringify(review)) as T
+}
+
+function freezeRecursively<T>(value: T): T {
+  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value
+  for (const nested of Object.values(value)) freezeRecursively(nested)
+  return Object.freeze(value)
 }
 
 function parseBrowserReviewEnvelopes(raw: string | null): PersistedReviewEnvelope[] {
@@ -403,7 +435,7 @@ function findValidatedBrowserReview(
 }
 
 export function saveBrowserReview(record: PersistedReview, storage?: ReviewStorage): void {
-  assertPersistedReview(record)
+  assertPersistedReviewForSave(record)
   const target = browserStorage(storage)
   if (!target) throw new Error('Local review storage is unavailable.')
   const next = insertBrowserReview(readBrowserReviewSnapshot(target).items, record)

@@ -87,6 +87,41 @@ describe('persisted review identity and browser storage', () => {
     expect(loadBrowserReview(record.reviewKey, storage)).toBeNull()
   })
 
+  it('saves an immutable completed-review snapshot without replaying its PGN twice', () => {
+    const storage = new MemoryStorage()
+    const sourceReport = report()
+    const timeline = createPgnTimeline('1. e4')
+    const move = vi.spyOn(Chess.prototype, 'move')
+    try {
+      const record = createPersistedReview(timeline, sourceReport)
+      const replayCountAfterCreation = move.mock.calls.length
+
+      expect(replayCountAfterCreation).toBeGreaterThan(0)
+      expect(Object.isFrozen(record)).toBe(true)
+      expect(Object.isFrozen(record.report)).toBe(true)
+      expect(Object.isFrozen(record.report.moves)).toBe(true)
+      expect(Object.isFrozen(record.report.moves[0]!)).toBe(true)
+
+      sourceReport.moves[0]!.feedback = 'The saved snapshot must stay detached from live review state.'
+      expect(record.report.moves[0]!.feedback).not.toBe(sourceReport.moves[0]!.feedback)
+
+      saveBrowserReview(record, storage)
+      expect(move.mock.calls.length).toBe(replayCountAfterCreation)
+    } finally {
+      move.mockRestore()
+    }
+  })
+
+  it('rejects a tampered cloned review before writing browser storage', () => {
+    const storage = new MemoryStorage()
+    const record = createPersistedReview(createPgnTimeline('1. e4'), report())
+    const tampered = JSON.parse(JSON.stringify(record)) as typeof record
+    tampered.report.moves[0]!.to = 'd4'
+
+    expect(() => saveBrowserReview(tampered, storage)).toThrow('Saved review')
+    expect(storage.getItem('knightclub.review-reports.v1')).toBeNull()
+  })
+
   it('falls through a corrupt newer duplicate and removes every duplicate on save', () => {
     const storage = new MemoryStorage()
     const valid = createPersistedReview(createPgnTimeline('1. e4'), report(), '2026-07-22T00:00:00.000Z')

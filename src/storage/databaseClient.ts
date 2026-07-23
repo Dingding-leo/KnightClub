@@ -7,7 +7,7 @@ import {
   type Preferences,
   type StoredGame,
 } from './gameStore'
-import { assertPersistedReview, type PersistedReview } from '../review/reviewPersistence'
+import { assertPersistedReview, assertPersistedReviewForSave, type PersistedReview } from '../review/reviewPersistence'
 import {
   MAX_RETRY_ITEMS,
   assertRetryItem,
@@ -237,7 +237,7 @@ export class DatabaseClient {
   }
 
   async saveReview(review: PersistedReview): Promise<void> {
-    assertPersistedReview(review)
+    assertPersistedReviewForSave(review)
     await this.enqueue(() => this.invoke('database_save_review', { review }).then(() => undefined))
   }
 

@@ -5,6 +5,13 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The two command-state handles keep their distinct cancellation policy,
+    // but intentionally point at one warm native Stockfish child. This avoids
+    // doubling Hash memory when a player moves from a game into Review.
+    let engine_pool = stockfish::EnginePool::default();
+    let play_engine = stockfish::StockfishState::from_engine_pool(&engine_pool);
+    let analysis_engine = stockfish::AnalysisState::from_engine_pool(&engine_pool);
+
     tauri::Builder::default()
         .on_page_load(|webview, payload| {
             if payload.event() != tauri::webview::PageLoadEvent::Finished {
@@ -29,8 +36,8 @@ pub fn run() {
             );
         })
         .plugin(tauri_plugin_dialog::init())
-        .manage(stockfish::StockfishState::default())
-        .manage(stockfish::AnalysisState::default())
+        .manage(play_engine)
+        .manage(analysis_engine)
         .invoke_handler(tauri::generate_handler![
             database::database_snapshot,
             database::database_bootstrap,
