@@ -1,5 +1,5 @@
 import { Chess } from 'chess.js'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { STANDARD_START_FEN } from '../domain/chess'
 import {
   BOT_PROFILES,
@@ -58,6 +58,17 @@ describe('local bot profiles', () => {
 
     const customFen = '8/8/8/8/8/8/4K3/7k w - - 0 1'
     expect(selectProfileOpeningMove(new Chess(customFen), customFen, 'w', mira)).toBeNull()
+  })
+
+  it('uses the supplied move snapshot instead of rebuilding a missed opening route', () => {
+    const mira = botProfileForId('mira-vale')
+    const game = new Chess()
+    game.move('d4')
+    const history = game.history()
+    const historySpy = vi.spyOn(game, 'history')
+
+    expect(selectProfileOpeningMove(game, STANDARD_START_FEN, game.turn(), mira, history)).toBeNull()
+    expect(historySpy).not.toHaveBeenCalled()
   })
 
   it('uses result-aware post-game copy from the bot perspective', () => {

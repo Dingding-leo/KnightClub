@@ -152,12 +152,12 @@ export function parseBrowserAnalysisInfo(line: string): BrowserAnalysisLine | nu
 
 function playPreset(level: BotLevel): BrowserSearchOptions {
   if (level === 'easy') {
-    return { moveTimeMs: 50, depth: null, nodes: 2_000, multiPv: 1, hashMb: 16, elo: 1320, skillLevel: 2, limitStrength: true, showWdl: false }
+    return { moveTimeMs: 50, depth: null, nodes: 1_000, multiPv: 1, hashMb: 16, elo: 1320, skillLevel: 2, limitStrength: true, showWdl: false }
   }
   if (level === 'strong') {
-    return { moveTimeMs: 120, depth: null, nodes: 12_000, multiPv: 1, hashMb: 32, elo: 2200, skillLevel: 14, limitStrength: true, showWdl: false }
+    return { moveTimeMs: 90, depth: null, nodes: 7_000, multiPv: 1, hashMb: 16, elo: 2200, skillLevel: 14, limitStrength: true, showWdl: false }
   }
-  return { moveTimeMs: 75, depth: null, nodes: 5_000, multiPv: 1, hashMb: 16, elo: 1700, skillLevel: 8, limitStrength: true, showWdl: false }
+  return { moveTimeMs: 60, depth: null, nodes: 3_000, multiPv: 1, hashMb: 16, elo: 1700, skillLevel: 8, limitStrength: true, showWdl: false }
 }
 
 export function resolveBrowserPlayOptions(

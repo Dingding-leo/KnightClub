@@ -20,6 +20,8 @@ Play shortcuts: `N` starts a new game, `U` or `⌘/Ctrl+Z` undoes a turn, `F` fl
 
 **Local PGN/FEN transfer:** Play offers **Copy PGN** and **Download PGN** for the current game, with immediate feedback beside its toolbar. Its **Position tools** offer **Copy current FEN** and **Download FEN**. Review accepts pasted notation or a deliberately selected local `.pgn`, `.fen` or `.txt` file through a keyboard-focusable picker, and a temporary Review variation exports its displayed FEN or self-contained branch PGN rather than the main line. Transfer remains on-device; an unavailable Clipboard API safely falls back or reports a clear status, and a rejected or stale file import cannot replace the active Review timeline.
 
+**Current low-power bot tuning (2026-07-23):** the active preset ceilings supersede the earlier historical summary: Easy uses 50 ms / 1,000 nodes, Balanced 60 ms / 3,000 nodes, and Strong 90 ms / 7,000 nodes. Every preset remains single-threaded with a 16 MB Hash; the existing 260/360/480 ms display floors preserve a calm human reply cadence without extending engine work.
+
 ## Principles
 
 - **Offline-first:** all runtime assets are bundled and cached by the PWA build.

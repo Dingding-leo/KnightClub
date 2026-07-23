@@ -74,8 +74,8 @@ describe('browser Stockfish UCI parsing', () => {
   })
 
   it('matches desktop strength profiles while capping browser memory', () => {
-    expect(resolveBrowserPlayOptions('easy')).toMatchObject({ elo: 1320, skillLevel: 2, moveTimeMs: 50, nodes: 2_000, hashMb: 16 })
-    expect(resolveBrowserPlayOptions('strong')).toMatchObject({ elo: 2200, skillLevel: 14, moveTimeMs: 120, nodes: 12_000, hashMb: 32 })
+    expect(resolveBrowserPlayOptions('easy')).toMatchObject({ elo: 1320, skillLevel: 2, moveTimeMs: 50, nodes: 1_000, hashMb: 16 })
+    expect(resolveBrowserPlayOptions('strong')).toMatchObject({ elo: 2200, skillLevel: 14, moveTimeMs: 90, nodes: 7_000, hashMb: 16 })
     expect(resolveBrowserPlayOptions('balanced', {
       ...DEFAULT_ENGINE_SETTINGS,
       profile: 'custom',
@@ -83,8 +83,8 @@ describe('browser Stockfish UCI parsing', () => {
       multiPv: 4,
     })).toMatchObject({ hashMb: 128, multiPv: 4 })
     expect(resolveBrowserPlayOptions('balanced', DEFAULT_ENGINE_SETTINGS, 2)).toMatchObject({
-      moveTimeMs: 75,
-      nodes: 5_000,
+      moveTimeMs: 60,
+      nodes: 3_000,
       hashMb: 16,
       multiPv: 2,
     })
@@ -110,7 +110,7 @@ describe('BrowserStockfishEngine', () => {
     expect(worker.messages).toContain('setoption name Threads value 1')
     expect(worker.messages).toContain('setoption name UCI_Elo value 1700')
     expect(worker.messages).toContain(`position fen ${fen}`)
-    expect(worker.messages).toContain('go movetime 75 nodes 5000')
+    expect(worker.messages).toContain('go movetime 60 nodes 3000')
 
     engine.dispose()
     expect(worker.terminated).toBe(true)
@@ -130,7 +130,7 @@ describe('BrowserStockfishEngine', () => {
     expect(worker.messages).toContain('setoption name Threads value 1')
     expect(worker.messages).toContain('setoption name MultiPV value 2')
     expect(worker.messages.filter((message) => message.startsWith('go '))).toEqual([
-      'go movetime 75 nodes 5000',
+      'go movetime 60 nodes 3000',
     ])
 
     engine.dispose()
@@ -187,15 +187,15 @@ describe('BrowserStockfishEngine', () => {
     await expect(first).rejects.toMatchObject({ name: 'AbortError' })
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(worker.messages).not.toContain('setoption name Hash value 32')
+    expect(worker.messages).not.toContain('setoption name UCI_Elo value 2200')
     expect(worker.messages.filter((message) => message === 'isready')).toHaveLength(readyCommandsAfterFirstConfiguration)
 
     worker.releaseReady()
     await vi.waitFor(() => expect(worker.messages.filter((message) => message === 'isready')).toHaveLength(readyCommandsAfterFirstConfiguration + 1))
-    expect(worker.messages).not.toContain('setoption name Hash value 32')
+    expect(worker.messages).not.toContain('setoption name UCI_Elo value 2200')
 
     worker.releaseReady()
-    await vi.waitFor(() => expect(worker.messages).toContain('setoption name Hash value 32'))
+    await vi.waitFor(() => expect(worker.messages).toContain('setoption name UCI_Elo value 2200'))
     await vi.waitFor(() => expect(worker.messages.filter((message) => message === 'isready')).toHaveLength(readyCommandsAfterFirstConfiguration + 2))
 
     worker.releaseReady()

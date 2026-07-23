@@ -968,8 +968,7 @@ export default function App() {
     soundPlayer.current.play(event)
   }, [])
 
-  const playMoveSound = useCallback((next: Chess) => {
-    const move = next.history({ verbose: true }).at(-1)
+  const playMoveSound = useCallback((next: Chess, move: Pick<Move, 'captured'>) => {
     playSound(next.isGameOver() ? 'game-end' : next.inCheck() ? 'check' : move?.captured ? 'capture' : 'move')
   }, [playSound])
 
@@ -1222,7 +1221,7 @@ export default function App() {
       setClock(completeClockMove(clock, game.turn(), now))
       captureClockNow(now)
       clearPremove(); setGame(next, [...verbose, applied]); setSelected(null); setPromotion(null); setNotice('')
-      playMoveSound(next)
+      playMoveSound(next, applied)
     } catch { setNotice('Time expired before that move completed.') }
   }
 
@@ -1742,7 +1741,7 @@ export default function App() {
     // A matching local cue is a real legal move, not a text overlay. Preserve
     // that authored opening path before checking whether the rules leave only
     // one reply; either local path avoids starting Stockfish.
-    const openingMove = selectProfileOpeningMove(game, startFen, botColor, botProfile)
+    const openingMove = selectProfileOpeningMove(game, startFen, botColor, botProfile, history)
     let pacingTimer: ReturnType<typeof window.setTimeout> | null = null
     let releasePacing: (() => void) | null = null
     const waitForPacing = (delay: number) => new Promise<void>((resolve) => {
@@ -1795,18 +1794,21 @@ export default function App() {
       let next = cloneGame(game, startFen, verbose)
       try {
         const now = Date.now()
-        const nextVerbose = [...verbose, next.move(chosen.move)]
+        const appliedBotMove = next.move(chosen.move)
+        const nextVerbose = [...verbose, appliedBotMove]
         const beforeBotClock = settleClock(clock, now)
         const afterBotClock = completeClockMove(clock, botColor, now)
         const queuedPremove = premoveRef.current
         premoveRef.current = null
         setPremove(null)
         let nextClock = afterBotClock
+        let latestAppliedMove = appliedBotMove
         const historySnapshots = [beforeBotClock]
         if (queuedPremove?.baseFen === requestFen && !next.isGameOver() && next.turn() === humanColor) {
           const afterPremove = applyPremoveToOwnedGame(next, humanColor, queuedPremove)
           if (afterPremove) {
             nextVerbose.push(afterPremove)
+            latestAppliedMove = afterPremove
             historySnapshots.push(settleClock(afterBotClock, now))
             nextClock = completeClockMove(afterBotClock, humanColor, now)
           } else {
@@ -1822,7 +1824,7 @@ export default function App() {
         } else if (chosen.usedStyle) {
           setNotice(botStyleReaction(botProfile))
         }
-        playMoveSound(next)
+        playMoveSound(next, latestAppliedMove)
       } catch {
         setNotice('Bot result was rejected safely.')
       }
@@ -1849,7 +1851,7 @@ export default function App() {
         release?.()
       }
     }
-  }, [game, mode, humanColor, botColor, botLevel, botProfile, engineSettings, startFen, gameFinished, decision, clock, desktop, playMoveSound, captureClockNow, setGame, verbose])
+  }, [game, mode, humanColor, botColor, botLevel, botProfile, engineSettings, startFen, gameFinished, decision, clock, desktop, playMoveSound, captureClockNow, setGame, history, verbose])
 
   const abortedGameCount = useMemo(() => library.filter((item) => item.moveCount === 0).length, [library])
   const visibleLibrary = useMemo(() => {

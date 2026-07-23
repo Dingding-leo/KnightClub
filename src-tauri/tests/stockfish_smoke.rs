@@ -2,7 +2,7 @@
 
 use knightclub_lib::stockfish::{
     AnalysisSettingsRequest, EngineSupervisor, SearchSettingsRequest, discover_stockfish,
-    probe_stockfish, resolve_analysis_settings, resolve_search_settings,
+    probe_stockfish, resolve_analysis_settings, resolve_search_settings, strength_preset,
 };
 use std::env;
 use std::path::PathBuf;
@@ -113,4 +113,45 @@ fn real_stockfish_returns_three_complete_analysis_lines() {
             && line.nps.is_some()
             && line.wdl.is_some()
     }));
+}
+
+#[test]
+fn real_stockfish_honors_low_compute_play_presets() {
+    if env::var("KNIGHTCLUB_RUN_STOCKFISH_SMOKE").as_deref() != Ok("1") {
+        return;
+    }
+    let path = discover_stockfish(
+        None,
+        env::var_os("KNIGHTCLUB_STOCKFISH").map(PathBuf::from),
+        env::var("PATH").ok().as_deref(),
+        &[
+            PathBuf::from("/opt/homebrew/bin/stockfish"),
+            PathBuf::from("/usr/local/bin/stockfish"),
+        ],
+    )
+    .expect("a local Stockfish executable");
+    let mut engine = EngineSupervisor::new(path);
+    let cancelled = AtomicU64::new(0);
+
+    for (request_id, level, node_cap) in [
+        (1, "easy", 1_000),
+        (2, "balanced", 3_000),
+        (3, "strong", 7_000),
+    ] {
+        let settings = strength_preset(level).expect("known preset");
+        let outcome = engine
+            .best_move(
+                START_FEN,
+                &settings,
+                Duration::from_secs(3),
+                request_id,
+                &cancelled,
+            )
+            .expect("real Stockfish preset move");
+        let reported_nodes = outcome.nodes.expect("Stockfish should report a node count");
+        // UCI engines can finish a small work unit just after observing the
+        // command boundary, so accept a narrow 5% accounting overshoot.
+        assert!(reported_nodes <= node_cap + node_cap / 20);
+        assert!(outcome.best_move.is_some());
+    }
 }

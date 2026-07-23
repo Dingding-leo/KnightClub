@@ -18,7 +18,8 @@
 - Original local Tactics Sprint: a three-position immediate practice path with no initial answer/PV exposure, local legal replay, two-stage hints, explicit reveal, reset and terminal outcome metrics
 - Bounded tactics progress plus immutable-attempt persistence in browser storage and SQLite schema v5, with deterministic reconciliation and atomic native attempt/progress recording
 - Explicit Review waiting state while a live bot move owns the local engine
-- Lower default bot budgets across browser and desktop: Easy/Balanced/Strong now cap at 2k/5k/12k nodes and 50/75/120 ms while preserving one-threaded named-profile behavior and display pacing
+- Lower default bot budgets across browser and desktop again: Easy/Balanced/Strong now cap at 1k/3k/7k nodes and 50/60/90 ms, retain one thread and 16 MB Hash, and preserve named-profile behavior and display pacing
+- Play now reuses its existing SAN snapshot for opening-cue matching and the move already applied for sound classification, avoiding repeated full-history reconstruction on long games
 - Play notation now uses memoized move rows plus one delegated selection handler, so long histories update only affected rows as moves arrive or players preview a position
 - Finished games now write their canonical review key directly from the existing verbose move history, while legacy library records backfill it only when opened; completing a review updates matching metadata without replaying every stored PGN
 - Full-game Review now waits for a local saved-report lookup before it enables a costly rerun, and labels an intentional rerun clearly

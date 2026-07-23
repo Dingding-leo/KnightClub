@@ -37,11 +37,11 @@ Candidates must be regular executable files. The path is passed directly to `std
 
 | Level | Elo | Skill | Move time | Node cap | Threads | Hash |
 |---|---:|---:|---:|---:|---:|---:|
-| Easy | 1320 | 2 | 50 ms | 2,000 | 1 | 16 MB |
-| Balanced | 1700 | 8 | 75 ms | 5,000 | 1 | 16 MB |
-| Strong | 2200 | 14 | 120 ms | 12,000 | 1 | 32 MB |
+| Easy | 1320 | 2 | 50 ms | 1,000 | 1 | 16 MB |
+| Balanced | 1700 | 8 | 60 ms | 3,000 | 1 | 16 MB |
+| Strong | 2200 | 14 | 90 ms | 7,000 | 1 | 16 MB |
 
-All three enable `UCI_LimitStrength` and stop on whichever time or node limit arrives first. The UI separately uses a short cancellable display floor (260/360/480 ms) so lower compute budgets do not make play look accidentally instantaneous. The 2k/5k/12k caps halve the prior default node ceilings while preserving the one-thread, three-level difficulty ordering. These are initial product presets, not rating guarantees; future calibration should use a fixed test suite and recorded hardware.
+All three enable `UCI_LimitStrength` and stop on whichever time or node limit arrives first. The UI separately uses a short cancellable display floor (260/360/480 ms) so lower compute budgets do not make play look accidentally instantaneous. The 1k/3k/7k caps reduce normal bot search work by roughly 50%/40%/42% from the preceding defaults while preserving the one-thread, three-level difficulty ordering; Strong also releases 16 MB of retained Hash. These are initial product presets, not rating guarantees; future calibration should use a fixed test suite and recorded hardware.
 
 ## Elo and custom profiles
 

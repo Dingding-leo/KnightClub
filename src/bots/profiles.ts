@@ -167,15 +167,18 @@ export function profileForLegacyLevel(level: BotLevel | undefined): BotProfile {
 /**
  * Returns a legal authored opening move only for an exact standard-start route.
  * It never mutates the displayed game and it never guesses in a custom FEN.
+ * Play supplies its already-cached SAN history so a long game never rebuilds
+ * that history once per authored cue on the bot-turn hot path.
  */
 export function selectProfileOpeningMove(
   game: Chess,
   startFen: string,
   botColor: Color,
   profile: BotProfile,
+  history: readonly string[] = game.history(),
 ): MoveInput | null {
   if (startFen !== STANDARD_START_FEN || game.turn() !== botColor) return null
-  const cue = profile.openingCues.find((candidate) => historiesMatch(game.history(), candidate.history))
+  const cue = profile.openingCues.find((candidate) => historiesMatch(history, candidate.history))
   if (!cue) return null
 
   try {
