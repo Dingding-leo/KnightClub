@@ -42,13 +42,13 @@ import { PlayPreviewNavigation } from './components/PlayPreviewNavigation'
 import type { TacticsSprintResult } from './components/TacticsSprint'
 import {
   cloneGame,
-  completedPgn,
   evaluateMaterial,
   formatEvaluation,
   gameResult,
   gameStatus,
   hasMatingMaterial,
   legalMovesFrom,
+  pgnFromHistory,
   previewGameAtPly,
   STANDARD_START_FEN,
   type BotLevel,
@@ -709,11 +709,13 @@ export default function App() {
         : 'Your move — choose a piece to continue.'
       : previewStatus ?? undefined
   const currentResult = termination?.result ?? gameResult(game)
-  const livePgn = useMemo(() => game.pgn(), [game])
+  // Play already owns the exact verbose move snapshot. Reusing it avoids
+  // chess.js undoing and replaying a long game merely to refresh autosave or
+  // the transfer toolbar after every committed ply.
   const sharePgn = useMemo(() => gameFinished
-    ? completedPgn(game, startFen, currentResult, currentStatus)
-    : livePgn || `[SetUp "1"]\n[FEN "${game.fen()}"]\n\n*`,
-  [game, gameFinished, startFen, currentResult, currentStatus, livePgn])
+    ? pgnFromHistory(game, startFen, verbose, currentResult, { Termination: currentStatus })
+    : pgnFromHistory(game, startFen, verbose),
+  [game, gameFinished, startFen, verbose, currentResult, currentStatus])
 
   useEffect(() => {
     if (history.length === 0 || setupAutoCollapsed.current) return

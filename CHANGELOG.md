@@ -94,6 +94,7 @@
 
 ### Changed
 
+- Live Play PGN export and active-session persistence now serialize the existing verbose move snapshot instead of asking `chess.js` to undo/replay the complete game after every move; standard/setup/promotion/result output remains compatible and annotated imports retain the authoritative fallback
 - Desktop **Verify engine** now shares Play's managed Stockfish supervisor, and the interface reserves a bot move or verification as the single local engine task instead of allowing competing work
 - Normal native Stockfish cancellation now retains the warm process, acknowledged UCI vector and Hash; the next `isready` fence drains late output safely, while failed and timed-out processes are still recreated
 - Review cursor changes now paint board/notation first, defer coach evidence and create strict retry payloads only when the player chooses Practice; ambient candidate analysis waits for a 350 ms idle pause before starting uncached engine work

@@ -190,15 +190,108 @@ export function recordedGameResult(game: Chess): string {
   return ['1-0', '0-1', '1/2-1/2'].includes(headerResult ?? '') ? headerResult : '*'
 }
 
-export function completedPgn(game: Chess, startFen: string, result: string, termination: string): string {
-  const completed = cloneGame(game, startFen)
-  if (startFen !== STANDARD_START_FEN) {
-    completed.setHeader('SetUp', '1')
-    completed.setHeader('FEN', startFen)
+type PgnHeaderOverrides = Readonly<Record<string, string>>
+
+function pgnMoveNumber(move: Move, fallback: number): number {
+  const value = Number(move.before.split(' ')[5])
+  return Number.isInteger(value) && value > 0 ? value : fallback
+}
+
+function pgnHeaders(
+  game: Chess,
+  startFen: string,
+  result: string,
+  overrides: PgnHeaderOverrides,
+): Array<[string, string]> {
+  const requested: Record<string, string> = { ...overrides, Result: result }
+  const consumed = new Set<string>()
+  const entries = Object.entries(game.getHeaders()).map(([name, value]) => {
+    consumed.add(name)
+    return [name, requested[name] ?? value] as [string, string]
+  })
+
+  for (const [name, value] of Object.entries(requested)) {
+    if (!consumed.has(name)) entries.push([name, value])
   }
-  completed.setHeader('Result', result)
-  completed.setHeader('Termination', termination)
-  return completed.pgn()
+
+  // Chess.js normally creates these tags when it starts from a setup FEN.
+  // Retain that standards-compatible export even for a restored legacy game
+  // whose header block did not carry the two fields forward.
+  if (startFen !== STANDARD_START_FEN) {
+    const setUp = entries.find(([name]) => name === 'SetUp')
+    const fen = entries.find(([name]) => name === 'FEN')
+    if (setUp) setUp[1] = '1'
+    else entries.push(['SetUp', '1'])
+    if (fen) fen[1] = startFen
+    else entries.push(['FEN', startFen])
+  }
+
+  return entries
+}
+
+function pgnMoveText(history: readonly Move[], result: string): string {
+  const rows: string[] = []
+  let current = ''
+  let fallbackMoveNumber = 1
+
+  for (const move of history) {
+    const number = pgnMoveNumber(move, fallbackMoveNumber)
+    fallbackMoveNumber = move.color === 'b' ? number + 1 : number
+
+    if (!current && move.color === 'b') {
+      current = `${number}. ...`
+    } else if (move.color === 'w') {
+      if (current) rows.push(current)
+      current = `${number}.`
+    }
+    current = `${current} ${move.san}`
+  }
+
+  if (current) rows.push(current)
+  rows.push(result)
+  return rows.join(' ')
+}
+
+/**
+ * Serializes a game from Play's immutable verbose-history snapshot instead of
+ * asking chess.js to undo and replay the complete game for every new ply.
+ * Comments are uncommon in the live Play path; retain chess.js's authoritative
+ * serializer for those imported positions so no annotation can be lost.
+ */
+export function pgnFromHistory(
+  game: Chess,
+  startFen: string,
+  history: readonly Move[],
+  result = game.getHeaders().Result ?? '*',
+  overrides: PgnHeaderOverrides = {},
+): string {
+  if (game.getComments().length > 0) {
+    const annotated = cloneGame(game, startFen, history)
+    for (const [name, value] of Object.entries(overrides)) annotated.setHeader(name, value)
+    annotated.setHeader('Result', result)
+    if (startFen !== STANDARD_START_FEN) {
+      annotated.setHeader('SetUp', '1')
+      annotated.setHeader('FEN', startFen)
+    }
+    return annotated.pgn()
+  }
+
+  const headers = pgnHeaders(game, startFen, result, overrides)
+  const headerText = headers.map(([name, value]) => `[${name} "${value}"]\n`).join('')
+  const moveText = pgnMoveText(history, result)
+  // Chess.js joins its empty no-move fragment with the mandatory result,
+  // which deliberately leaves this leading separator in a fresh export.
+  return `${headerText}${headerText && history.length ? '\n' : ''}${history.length ? moveText : ` ${moveText}`}`
+}
+
+export function completedPgn(game: Chess, startFen: string, result: string, termination: string): string {
+  return pgnFromHistory(
+    game,
+    startFen,
+    game.history({ verbose: true }),
+    result,
+    { Termination: termination },
+  )
 }
 
 export function gameStatus(game: Chess): string {
