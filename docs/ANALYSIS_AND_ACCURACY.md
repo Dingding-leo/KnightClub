@@ -24,6 +24,8 @@ Retry prompts have their own bounded storage and lifecycle. They are keyed by re
 
 For every played move, the review runner analyses the position before the move with at least two candidate lines. It analyses the resulting position separately unless `chess.js` already proves checkmate or draw, in which case the rules-layer result is exact and no terminal engine request is made. Scores after a move are negated into the mover's perspective. A move that exactly matches PV1 receives zero loss so independent-search drift cannot penalize an engine-confirmed best move.
 
+After every fully classified non-final move, Review also exposes a **session-only** checkpoint. It contains a copied contiguous provisional report plus the exact MultiPV response for the position before the next move. That response is reused on **Resume review**, so stopping does not repeat a completed boundary search. The UI labels these results as provisional, allows **Stop & keep**, **Resume review** and **Discard**, and holds ambient candidate analysis off while paused. Checkpoints retain their original bounded settings and validate the timeline prefix, FEN and engine identity before continuing. They are not completed reports: they are never persisted, restored after reload, linked into Library, or used to create Retry/Train prompts.
+
 Centipawn scores are converted to expected game score with KnightClub's original smooth model:
 
 ```text
@@ -40,7 +42,7 @@ Feedback names the played move, better move, concrete origin/destination or unde
 
 ## Completed reports and future reproducible jobs
 
-The implemented completed-report record retains the engine name/path, bounded Threads/Hash/MultiPV/search settings, source PGN, canonical start FEN, move count, completion time and the full review result. It is a completed outcome only: it does not claim an executable checksum/platform fingerprint, per-position cache or a resumable search after termination. Scores remain normalized at display time, distinguish mate from centipawn values, preserve score bounds and principal variations, and retain raw side-to-move WDL.
+The implemented completed-report record retains the engine name/path, bounded Threads/Hash/MultiPV/search settings, source PGN, canonical start FEN, move count, completion time and the full review result. It is a completed outcome only: it does not claim an executable checksum/platform fingerprint, per-position cache or a resumable search after termination. The separate session checkpoint deliberately disappears on reload rather than weakening that completed-record boundary. Scores remain normalized at display time, distinguish mate from centipawn values, preserve score bounds and principal variations, and retain raw side-to-move WDL.
 
 Future reusable analysis jobs must add engine name/version, executable checksum, platform, an immutable settings/model fingerprint, progress and error state. Such a job can then be resumed or retried deterministically for its recorded settings rather than treating a completed report as a cache of engine positions.
 

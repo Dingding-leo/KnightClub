@@ -68,7 +68,12 @@ import {
 } from '../analysis/variationLine'
 import { copyText, downloadText } from '../domain/textTransfer'
 import { legalMovesFrom, STANDARD_START_FEN } from '../domain/chess'
-import { runGameReview, type GameReview, type ReviewProgress } from '../review/gameReviewRunner'
+import {
+  runResumableGameReview,
+  type GameReview,
+  type ReviewCheckpoint,
+  type ReviewProgress,
+} from '../review/gameReviewRunner'
 import { reviewProgressAnnouncement } from '../review/reviewProgressAnnouncement'
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { MoveClassification, ReviewedMove } from '../review/reviewModel'
@@ -179,6 +184,28 @@ interface LiveTimelineSnapshot {
 export function ReviewSaveNotice({ saving }: { saving: boolean }) {
   if (!saving) return null
   return <p className="review-retained" role="status">Saving review privately on this device…</p>
+}
+
+/** A session-only checkpoint never masquerades as a completed saved report. */
+export function ReviewCheckpointNotice({
+  checkpoint,
+  running,
+  onOpenLatest,
+}: {
+  checkpoint: ReviewCheckpoint
+  running: boolean
+  onOpenLatest: () => void
+}) {
+  return (
+    <div className="review-checkpoint">
+      <div role="status">
+        <strong>{running ? 'Provisional feedback ready' : 'Review paused'}</strong>
+        <span>{checkpoint.completedPly} of {checkpoint.totalPly} moves analysed · kept only in this session, not saved yet.</span>
+      </div>
+      <button className="secondary-button" type="button" onClick={onOpenLatest}>Open latest move</button>
+      {!running && <small>Resume uses the same local engine settings so these scores stay consistent.</small>}
+    </div>
+  )
 }
 
 type RetrySaveAction = 'batch' | 'single'
@@ -643,6 +670,9 @@ export function AnalysisWorkspace({
   const [loading, setLoading] = useState(false)
   const [timelineLoading, setTimelineLoading] = useState(initialPgnNeedsWorker)
   const [review, setReview] = useState<GameReview | null>(null)
+  // A checkpoint is deliberately separate from `review`: only complete
+  // reports can produce Retry items or cross the persistence boundary.
+  const [reviewCheckpoint, setReviewCheckpoint] = useState<ReviewCheckpoint | null>(null)
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress | null>(null)
   const [reviewRunning, setReviewRunning] = useState(false)
   const [reviewSaving, setReviewSaving] = useState(false)
@@ -664,6 +694,7 @@ export function AnalysisWorkspace({
   const client = useRef<StockfishAnalysisClient | null>(null)
   const ambientAnalysisCache = useRef(new AmbientAnalysisCache())
   const reviewClient = useRef<StockfishAnalysisClient | null>(null)
+  const reviewCheckpointRef = useRef<ReviewCheckpoint | null>(null)
   const reviewAbort = useRef<AbortController | null>(null)
   const reviewLoadVersion = useRef(0)
   const reviewRunVersion = useRef(0)
@@ -727,7 +758,9 @@ export function AnalysisWorkspace({
     hasReview: review !== null,
     moveCount: timeline.moves.length,
   })
-  const selectedReview = variationActive ? null : selectedReviewMoveAtPly(review, ply)
+  const provisionalReview = reviewCheckpoint?.report ?? null
+  const displayedReview = review ?? provisionalReview
+  const selectedReview = variationActive ? null : selectedReviewMoveAtPly(displayedReview, ply)
   // Cursor navigation updates the board and notation at interaction priority.
   // Tactical proof can inspect several reconstructed boards, so let React
   // compute it after that paint rather than on every arrow-key press.
@@ -754,7 +787,8 @@ export function AnalysisWorkspace({
   }, [review, reviewKey, retryStore])
   const hasRetryCandidates = batchRetryCandidates.length > 0
   const selectedRetryEligible = Boolean(
-    selectedReview
+    !reviewCheckpoint
+    && selectedReview
     && reviewKey
     && retryStore
     && verifiedRetryTimeline
@@ -778,6 +812,11 @@ export function AnalysisWorkspace({
   const isReviewRunCurrent = (version: number) => {
     return mounted.current && version === reviewRunVersion.current
   }
+
+  const clearReviewCheckpoint = useCallback(() => {
+    reviewCheckpointRef.current = null
+    setReviewCheckpoint(null)
+  }, [])
 
   const getTimelineParser = useCallback(() => {
     timelineParser.current ??= new TimelineWorkerClient()
@@ -967,7 +1006,11 @@ export function AnalysisWorkspace({
   }, [clearVariationInteraction, variation])
 
   useEffect(() => {
-    if (!enabled || reviewRunning || positionTerminal || engineBusy || timelineLoading) {
+    // A paused full review owns its reusable MultiPV baseline in memory.
+    // Keep ambient candidate lines asleep until the player resumes or discards
+    // that checkpoint so Stop actually frees local CPU instead of immediately
+    // starting a lower-priority engine request.
+    if (!enabled || reviewRunning || reviewCheckpoint || positionTerminal || engineBusy || timelineLoading) {
       client.current?.cancel()
       setLoading(false)
       setAnalysis(null)
@@ -1037,7 +1080,7 @@ export function AnalysisWorkspace({
       window.clearTimeout(timer)
       analysisClient.cancel()
     }
-  }, [desktop, displayedPosition.fen, effort, enabled, engineBusy, engineHashMb, enginePath, engineThreads, multiPv, onReviewEngineStarting, positionTerminal, reviewRunning, timelineLoading])
+  }, [desktop, displayedPosition.fen, effort, enabled, engineBusy, engineHashMb, enginePath, engineThreads, multiPv, onReviewEngineStarting, positionTerminal, reviewCheckpoint, reviewRunning, timelineLoading])
 
   useEffect(() => {
     const importGate = fileImportGate.current
@@ -1146,6 +1189,9 @@ export function AnalysisWorkspace({
 
   useEffect(() => {
     const version = ++reviewLoadVersion.current
+    // A change of review identity is a hard boundary for in-memory work. A
+    // checkpoint cannot safely follow a new PGN, FEN, or restored report.
+    clearReviewCheckpoint()
     setReview(null)
     setReviewOrigin(null)
     setReviewError('')
@@ -1173,7 +1219,7 @@ export function AnalysisWorkspace({
     return () => {
       if (version === reviewLoadVersion.current) reviewLoadVersion.current += 1
     }
-  }, [reviewKey, reviewStore, timeline.moves.length, timeline.startFen])
+  }, [clearReviewCheckpoint, reviewKey, reviewStore, timeline.moves.length, timeline.startFen])
 
   useEffect(() => {
     if (timelineLoading
@@ -1200,6 +1246,7 @@ export function AnalysisWorkspace({
     reviewAbort.current?.abort()
     disposeAndClearClient(reviewClient)
     reviewAbort.current = null
+    clearReviewCheckpoint()
     cancelRetryTimelinePreparation()
     fileImportGate.current.invalidate()
     const parseRequestId = parseGate.begin()
@@ -1236,6 +1283,7 @@ export function AnalysisWorkspace({
         setPgnInput(record.sourcePgn)
         setPly(target.sourcePly)
         setReview(null)
+        clearReviewCheckpoint()
         setReviewOrigin(null)
         setReviewProgress(null)
         setReviewRunning(false)
@@ -1265,7 +1313,7 @@ export function AnalysisWorkspace({
       if (parseGate.isCurrent(parseRequestId)) parseGate.invalidate()
       activeParser?.cancel()
     }
-  }, [cancelRetryTimelinePreparation, clearVariationInteraction, getTimelineParser, onRequestedReviewTargetHandled, requestedReviewTarget, reviewStore])
+  }, [cancelRetryTimelinePreparation, clearReviewCheckpoint, clearVariationInteraction, getTimelineParser, onRequestedReviewTargetHandled, requestedReviewTarget, reviewStore])
 
   const stopFullReview = useCallback(() => {
     reviewRunVersion.current += 1
@@ -1278,8 +1326,10 @@ export function AnalysisWorkspace({
     setReviewProgress(null)
   }, [cancelRetryTimelinePreparation])
 
-  const startFullReview = async () => {
+  const startFullReview = async (resume = false) => {
     if (!timeline.moves.length || reviewRunning || engineBusy || reviewHydrating || timelineLoading) return
+    const resumeFrom = resume ? reviewCheckpointRef.current : null
+    if (resume && !resumeFrom) return
     if (timeline.moves.length > MAX_REVIEW_PLIES) {
       setReviewError(`Full-game review is limited to ${MAX_REVIEW_PLIES.toLocaleString()} plies. You can still browse this game and analyse any position.`)
       return
@@ -1301,34 +1351,61 @@ export function AnalysisWorkspace({
     const reviewAnalysisClient = reviewClient.current ?? new StockfishAnalysisClient()
     reviewClient.current = reviewAnalysisClient
     const selectedEffort = effortOptions[effort]
-    const settings: AnalysisSettings = {
-      moveTimeMs: selectedEffort.moveTimeMs,
-      depth: selectedEffort.depth,
-      nodes: null,
-      multiPv: Math.max(2, multiPv),
-      threads: engineThreads,
-      hashMb: engineHashMb,
-    }
+    // A resume intentionally keeps the exact same bounded settings. Mixing a
+    // faster/slower or differently configured engine halfway through would
+    // make the provisional scorecard misleading.
+    const settings: AnalysisSettings = resumeFrom
+      ? { ...resumeFrom.report.settings }
+      : {
+          moveTimeMs: selectedEffort.moveTimeMs,
+          depth: selectedEffort.depth,
+          nodes: null,
+          multiPv: Math.max(2, multiPv),
+          threads: engineThreads,
+          hashMb: engineHashMb,
+        }
     setReviewRunning(true)
     setReviewSaving(false)
     setReviewHydrating(false)
-    setReview(null)
+    if (!resumeFrom) {
+      clearReviewCheckpoint()
+      setReview(null)
+    }
     setReviewOrigin(null)
     setReviewError('')
     setRetryError('')
-    setReviewProgress({ completedPly: 0, totalPly: timeline.moves.length, stage: 'before' })
+    setReviewProgress({
+      completedPly: resumeFrom?.completedPly ?? 0,
+      totalPly: timeline.moves.length,
+      stage: 'before',
+    })
     try {
-      const result = await runGameReview(
+      const result = await runResumableGameReview(
         timeline,
         (fen, requestSettings) => reviewAnalysisClient.analyze(fen, enginePath, requestSettings),
         settings,
-        setReviewProgress,
-        controller.signal,
+        {
+          resumeFrom,
+          signal: controller.signal,
+          onProgress: (progress) => {
+            if (controller.signal.aborted || !isReviewRunCurrent(runVersion)) return
+            setReviewProgress(progress)
+          },
+          onCheckpoint: (checkpoint) => {
+            // A checkpoint only follows a fully classified ply. Keep it in
+            // session memory; specifically do not set `review`, whose effects
+            // are reserved for completed persistence and Training work.
+            if (controller.signal.aborted || !isReviewRunCurrent(runVersion)) return
+            reviewCheckpointRef.current = checkpoint
+            setReviewCheckpoint(checkpoint)
+          },
+        },
       )
       if (controller.signal.aborted || !isReviewRunCurrent(runVersion)) return
       // Results belong to the player as soon as Stockfish completes. Saving is
       // intentionally detached below so a busy native write never holds this
       // screen or its controls hostage.
+      clearReviewCheckpoint()
       setReview(result)
       setReviewOrigin(null)
       setReviewProgress(null)
@@ -1383,6 +1460,14 @@ export function AnalysisWorkspace({
     }
   }
 
+  const discardReviewCheckpoint = () => {
+    if (reviewRunning) return
+    clearReviewCheckpoint()
+    setReviewProgress(null)
+    setReviewError('')
+    setRetryError('')
+  }
+
   const applyTimeline = useCallback((next: AnalysisTimeline) => {
     // Invalidate an older saved-review lookup before the new timeline renders.
     // The effect below will start its own lookup for `next`; this synchronous
@@ -1390,6 +1475,7 @@ export function AnalysisWorkspace({
     reviewLoadVersion.current += 1
     clearVariationInteraction()
     stopFullReview()
+    clearReviewCheckpoint()
     // Any successfully applied source (initial, pasted, file or FEN) settles
     // the transient mount intent. This deliberately happens only after a
     // Worker result wins its request gate, so React StrictMode can retry a
@@ -1403,7 +1489,7 @@ export function AnalysisWorkspace({
     setReviewProgress(null)
     setReviewError('')
     setRetryError('')
-  }, [clearVariationInteraction, stopFullReview])
+  }, [clearReviewCheckpoint, clearVariationInteraction, stopFullReview])
 
   const parsePgnInWorker = useCallback(async (
     pgn: string,
@@ -1802,7 +1888,12 @@ export function AnalysisWorkspace({
             <div className="full-review__heading">
               <div><span className="eyebrow">Game review</span><strong>{fullReviewOverPlyLimit ? `Full-game review limit · ${MAX_REVIEW_PLIES.toLocaleString()} plies` : `${timeline.moves.length} plies · up to ${timeline.moves.length + 1} position searches`}</strong></div>
               {reviewRunning ? (
-                <button className="danger-button" type="button" onClick={stopFullReview}><CircleStop size={15} />Stop</button>
+                <button className="danger-button" type="button" onClick={stopFullReview}><CircleStop size={15} />Stop &amp; keep</button>
+              ) : reviewCheckpoint ? (
+                <div className="full-review__actions">
+                  <button className="primary-button" type="button" disabled={engineBusy || reviewHydrating || timelineLoading} onClick={() => void startFullReview(true)}><PlayCircle size={15} />Resume review</button>
+                  <button className="secondary-button" type="button" onClick={discardReviewCheckpoint}><RotateCcw size={15} />Discard</button>
+                </div>
               ) : (
                 <button className="primary-button" type="button" disabled={fullReviewAction.disabled} onClick={() => void startFullReview()}><PlayCircle size={15} />{fullReviewAction.label}</button>
               )}
@@ -1828,17 +1919,22 @@ export function AnalysisWorkspace({
                 </p>
               </div>
             )}
+            {reviewCheckpoint && <ReviewCheckpointNotice
+              checkpoint={reviewCheckpoint}
+              running={reviewRunning}
+              onOpenLatest={() => selectMainlinePly(reviewCheckpoint.completedPly)}
+            />}
             {reviewError && <p className="analysis-error" role="alert">{reviewError}</p>}
-            {review && (
+            {displayedReview && (
               <div className="review-results">
-                {reviewOrigin && <p className="review-retained" role="status">
+                {reviewOrigin && !reviewCheckpoint && <p className="review-retained" role="status">
                   {reviewOrigin === 'restored' ? 'Saved review restored from this device.' : 'Review saved privately on this device.'}
                 </p>}
                 <div className="review-scorecards">
-                  <div><span>Overall</span><strong>{review.summary.accuracy}</strong><small>accuracy</small></div>
-                  <div><span>White / Black</span><strong>{review.summary.whiteAccuracy ?? '—'} / {review.summary.blackAccuracy ?? '—'}</strong><small>accuracy</small></div>
-                  <div><span>Avg loss</span><strong>{review.summary.averageCentipawnLoss}</strong><small>centipawns</small></div>
-                  <div><span>Best found</span><strong>{review.summary.bestMoveRate}%</strong><small>of moves</small></div>
+                  <div><span>{reviewCheckpoint ? 'So far' : 'Overall'}</span><strong>{displayedReview.summary.accuracy}</strong><small>accuracy</small></div>
+                  <div><span>White / Black</span><strong>{displayedReview.summary.whiteAccuracy ?? '—'} / {displayedReview.summary.blackAccuracy ?? '—'}</strong><small>accuracy</small></div>
+                  <div><span>Avg loss</span><strong>{displayedReview.summary.averageCentipawnLoss}</strong><small>centipawns</small></div>
+                  <div><span>Best found</span><strong>{displayedReview.summary.bestMoveRate}%</strong><small>of moves</small></div>
                 </div>
                 {hasRetryCandidates && (
                   <RetryPreparationNotice
@@ -1863,10 +1959,10 @@ export function AnalysisWorkspace({
                     />
                   </div>
                 )}
-                {review.summary.turningPoints.length > 0 && (
+                {displayedReview.summary.turningPoints.length > 0 && (
                   <div className="turning-points">
                     <span>Key turning points</span>
-                    <div>{review.summary.turningPoints.map((move) => (
+                    <div>{displayedReview.summary.turningPoints.map((move) => (
                       <button type="button" key={move.ply} onClick={() => selectMainlinePly(move.ply)}>
                         {move.moveNumber}{move.color === 'b' ? '…' : '.'}{move.san}
                         <em className={`review-badge review-badge--${move.classification}`}>{classificationLabels[move.classification]}</em>
@@ -1886,13 +1982,15 @@ export function AnalysisWorkspace({
                   </article>
                 )}
                 {retryError && <p className="analysis-error" role="alert">{retryError}</p>}
-                <footer>{review.engineName} · {(review.totalElapsedMs / 1000).toFixed(1)} s engine time · completed locally</footer>
+                <footer>{displayedReview.engineName} · {(displayedReview.totalElapsedMs / 1000).toFixed(1)} s engine time · {reviewCheckpoint ? 'provisional · not saved' : 'completed locally'}</footer>
               </div>
             )}
           </section>
         )}
 
-        {reviewRunning ? null : !enabled ? (
+        {reviewRunning ? null : reviewCheckpoint ? (
+          <div className="analysis-empty" role="status"><Gauge size={28} /><strong>Review paused</strong><span>Resume the saved in-session checkpoint or discard it to return to candidate lines.</span></div>
+        ) : !enabled ? (
           <div className="analysis-empty" role="status"><Gauge size={28} /><strong>Analysis paused</strong><span>Turn Stockfish on when you want fresh candidate lines.</span></div>
         ) : engineBusy ? (
           <div className="analysis-empty" role="status" aria-live="polite"><Gauge size={28} /><strong>Analysis is waiting for the bot</strong><span>The current game move has priority, so this device runs one engine task at a time.</span></div>

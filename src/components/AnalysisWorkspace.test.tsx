@@ -7,6 +7,7 @@ import {
   AnalysisWorkspace,
   CoachEvidenceCard,
   LiveGameContinuationNotice,
+  ReviewCheckpointNotice,
   RetryPreparationNotice,
   RetryPracticeButton,
   RetrySaveNotice,
@@ -20,7 +21,7 @@ import { createInitialWorkspaceState, liveTimelineFor } from '../review/reviewWo
 import type { CoachGuidance } from '../review/coach'
 import type { ReviewedMove } from '../review/reviewModel'
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
-import type { GameReview } from '../review/gameReviewRunner'
+import type { GameReview, ReviewCheckpoint } from '../review/gameReviewRunner'
 import type { PersistedReview } from '../review/reviewPersistence'
 import type { RetryItem } from '../review/retry'
 import { saveRetryItemsSerially } from '../review/retryQueuePersistence'
@@ -78,6 +79,20 @@ function retryItem(retryKey: string): RetryItem {
 }
 
 describe('analysis workspace convenience contracts', () => {
+  it('makes a paused checkpoint visibly provisional and keeps its resume promise clear', () => {
+    const checkpoint = { completedPly: 6, totalPly: 40 } as ReviewCheckpoint
+    const markup = renderToStaticMarkup(
+      <ReviewCheckpointNotice checkpoint={checkpoint} running={false} onOpenLatest={vi.fn()} />,
+    )
+
+    expect(markup).toContain('Review paused')
+    expect(markup).toContain('6 of 40 moves analysed')
+    expect(markup).toContain('kept only in this session, not saved yet')
+    expect(markup).toContain('Open latest move')
+    expect(markup).toContain('same local engine settings')
+    expect(markup).not.toContain('completed locally')
+  })
+
   it('limits full-review screen-reader progress to useful five-percent milestones', () => {
     expect(reviewProgressAnnouncement({ completedPly: 0, totalPly: 1_024, stage: 'before' })).toBe('Full-game review started.')
     expect(reviewProgressAnnouncement({ completedPly: 51, totalPly: 1_024, stage: 'after' })).toBe('Full-game review started.')
