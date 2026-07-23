@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { shouldReleaseIdlePlayBrowserRuntime } from './playRuntimeLifecycle'
+import { shouldReleaseIdlePlayRuntime } from './playRuntimeLifecycle'
 
-describe('Play browser runtime lifecycle', () => {
-  it('releases a settled browser engine after the player leaves Play or completes a game', () => {
-    expect(shouldReleaseIdlePlayBrowserRuntime({
+describe('Play engine runtime lifecycle', () => {
+  it('releases a settled engine after the player leaves Play or completes a game', () => {
+    expect(shouldReleaseIdlePlayRuntime({
       outsidePlay: true,
       gameFinished: false,
       premoveWindow: false,
       thinking: false,
       engineProbeActive: false,
     })).toBe(true)
-    expect(shouldReleaseIdlePlayBrowserRuntime({
+    expect(shouldReleaseIdlePlayRuntime({
       outsidePlay: false,
       gameFinished: true,
       premoveWindow: false,
@@ -25,6 +25,6 @@ describe('Play browser runtime lifecycle', () => {
     { label: 'the short reply-settlement frame', outsidePlay: true, gameFinished: false, premoveWindow: false, thinking: true, engineProbeActive: false },
     { label: 'a Stockfish verification', outsidePlay: true, gameFinished: false, premoveWindow: false, thinking: false, engineProbeActive: true },
   ])('keeps the runtime while $label', ({ label: _label, ...state }) => {
-    expect(shouldReleaseIdlePlayBrowserRuntime(state)).toBe(false)
+    expect(shouldReleaseIdlePlayRuntime(state)).toBe(false)
   })
 })

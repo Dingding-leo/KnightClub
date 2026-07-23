@@ -28,6 +28,8 @@ Play shortcuts: `N` starts a new game, `U` or `⌘/Ctrl+Z` undoes a turn, `F` fl
 
 **Current low-power bot tuning (2026-07-23):** Easy uses 50 ms / 1,000 nodes, Balanced 50 ms / 1,500 nodes, and Strong 60 ms / 3,000 nodes. The browser adapter and native UCI command both apply those ceilings to every live Play request, including Elo and Custom profiles, force one thread / 16 MB Hash / baseline one PV and convert an omitted node cap into the finite level limit. A named opponent can raise only that same search to two PVs. Lower valid time/node choices remain respected; no custom control can raise a Play reply above its level cap. The existing 260/360/480 ms display floors preserve a calm human reply cadence without extending engine work. After a full desktop Review settles, its shared native process is released only when no newer Play or Review task owns it, returning that Review Hash and Stockfish NNUE memory to macOS.
 
+**Default opening responsiveness (2026-07-23):** Rowan Pike is the first selected opponent, so its conventional `1. e4 e5 2. Nf3 Nc6` route is now two real, `chess.js`-validated local moves. The common first interaction therefore paints and replies without booting the 7 MB browser Stockfish runtime; deviations still use the existing bounded local engine. Once a player leaves Play or a game ends, the same safe idle gate now releases either browser Workers or the desktop pool’s idle native child, returning its NNUE/Hash memory without interrupting a live move, premove, Verify or Review task.
+
 ## Principles
 
 - **Offline-first:** all runtime assets are bundled and cached by the PWA build.

@@ -1,5 +1,7 @@
 import { Chess } from 'chess.js'
 import { describe, expect, it, vi } from 'vitest'
+import { botProfileForId, selectProfileOpeningMove } from '../bots/profiles'
+import { STANDARD_START_FEN } from '../domain/chess'
 import { requestPlayMove } from './playMoveRequest'
 import type { EngineSearchResult } from './stockfishClient'
 
@@ -22,6 +24,25 @@ describe('Play move request', () => {
     })
 
     expect(result).toMatchObject({ provider: 'opening-cue', move: { from: 'e2', to: 'e4' } })
+    expect(search).not.toHaveBeenCalled()
+  })
+
+  it('keeps the default e4 response entirely local', async () => {
+    const game = new Chess()
+    game.move('e4')
+    const search = vi.fn(async () => engineResult)
+    const openingMove = selectProfileOpeningMove(
+      game,
+      STANDARD_START_FEN,
+      'b',
+      botProfileForId('rowan-pike'),
+      game.history(),
+    )
+
+    await expect(requestPlayMove({ game, openingMove, search })).resolves.toMatchObject({
+      provider: 'opening-cue',
+      move: { from: 'e7', to: 'e5' },
+    })
     expect(search).not.toHaveBeenCalled()
   })
 

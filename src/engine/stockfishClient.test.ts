@@ -54,12 +54,28 @@ describe('Hybrid engine startup', () => {
     internal.browserStockfish = { dispose: disposeStockfish }
     internal.fallback = { dispose: disposeFallback }
 
-    client.releaseIdleBrowserRuntime()
+    client.releaseIdleRuntime()
 
     expect(disposeStockfish).toHaveBeenCalledOnce()
     expect(disposeFallback).toHaveBeenCalledOnce()
     expect(internal.browserStockfish).toBeNull()
     expect(internal.fallback).toBeNull()
+    client.dispose()
+  })
+
+  it('asks the desktop pool to release only a safely idle native runtime', () => {
+    const client = new HybridEngineClient()
+    const releaseIdle = vi.fn()
+    const internal = client as unknown as {
+      desktop: boolean
+      stockfish: { releaseIdle: () => void; cancel: () => void }
+    }
+    internal.desktop = true
+    internal.stockfish = { releaseIdle, cancel: vi.fn() }
+
+    client.releaseIdleRuntime()
+
+    expect(releaseIdle).toHaveBeenCalledOnce()
     client.dispose()
   })
 })
@@ -78,6 +94,15 @@ describe('UCI move parsing', () => {
 })
 
 describe('StockfishClient', () => {
+  it('uses the native idle-release command without waiting on an active search', () => {
+    const invoke = vi.fn(async () => true)
+    const client = new StockfishClient(invoke)
+
+    client.releaseIdle()
+
+    expect(invoke).toHaveBeenCalledWith('stockfish_release_idle')
+  })
+
   it('returns a typed move only for the matching request and FEN', async () => {
     const invoke = vi.fn(async () => response())
     const client = new StockfishClient(invoke)

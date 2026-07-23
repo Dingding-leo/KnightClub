@@ -446,6 +446,8 @@ describe('bot player-side setup', () => {
     expect(continuingMarkup).toContain('aria-live="polite"')
     expect(continuingMarkup).toContain('aria-atomic="true"')
     expect(continuingMarkup).toContain('aria-label="Your move — Rowan Pike played e5. Choose a piece to continue."')
+    expect(continuingMarkup).toContain('class="board-status__full"')
+    expect(continuingMarkup).toContain('class="board-status__compact" aria-hidden="true">Your move · e5</span>')
 
     const blackMarkup = renderApp({
       pgn: '',
@@ -457,6 +459,7 @@ describe('bot player-side setup', () => {
       colorChoice: 'black',
     })
     expect(blackMarkup).toContain('>Rowan Pike is thinking — queue one premove.</span>')
+    expect(blackMarkup).toContain('class="board-status__compact" aria-hidden="true">Bot thinking · queue premove</span>')
     expect(blackMarkup).not.toContain('>Your move</span>')
 
     const blackTurnMarkup = renderApp({

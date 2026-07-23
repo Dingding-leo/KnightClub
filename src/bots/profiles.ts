@@ -90,6 +90,11 @@ export const BOT_PROFILES: readonly BotProfile[] = [
     intro: 'Claims central space and can favor a close classical line after it.',
     openingCues: [
       { history: [], move: move('d2', 'd4') },
+      // Rowan is the default opponent. Cover the two most common open-game
+      // replies locally so a new player does not need to boot the WASM engine
+      // just to receive a conventional first response.
+      { history: ['e4'], move: move('e7', 'e5') },
+      { history: ['e4', 'e5', 'Nf3'], move: move('b8', 'c6') },
       { history: ['d4'], move: move('d7', 'd5') },
       { history: ['d4', 'd5'], move: move('c2', 'c4') },
       { history: ['d4', 'd5', 'c4'], move: move('e7', 'e6') },

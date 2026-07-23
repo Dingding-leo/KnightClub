@@ -118,7 +118,7 @@ import {
 import { HybridEngineClient, isTauriRuntime, type EngineSearchResult } from './engine/stockfishClient'
 import { engineSettingsLabel, normalizeEngineSettings } from './engine/engineSettings'
 import { playEngineFailureStatus, playEngineStatusUpdate } from './engine/playEngineStatus'
-import { shouldReleaseIdlePlayBrowserRuntime } from './engine/playRuntimeLifecycle'
+import { shouldReleaseIdlePlayRuntime } from './engine/playRuntimeLifecycle'
 import { requestPlayMove } from './engine/playMoveRequest'
 import {
   DEFAULT_BOT_PROFILE_ID,
@@ -1209,6 +1209,12 @@ export default function App() {
         ? 'Your move — choose a piece to begin.'
         : 'Your move — choose a piece to continue.'
       : previewStatus ?? undefined
+  // On a phone, the player needs the actionable SAN or premove cue before the
+  // longer conversational status. The complete sibling remains the live,
+  // accessible announcement; CSS swaps only the visual presentation.
+  const compactBoardStatus = premoveWindow
+    ? 'Bot thinking · queue premove'
+    : latestBotMove ? `Your move · ${latestBotMove.san}` : boardStatus
   const currentResult = termination?.result ?? gameResult(game)
   // Play already owns the exact verbose move snapshot. Reusing it avoids
   // chess.js undoing and replaying a long game merely to refresh autosave or
@@ -2760,17 +2766,18 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!shouldReleaseIdlePlayBrowserRuntime({
+    if (!shouldReleaseIdlePlayRuntime({
       outsidePlay: tab !== 'play',
       gameFinished,
       premoveWindow,
       thinking,
       engineProbeActive,
     })) return
-    // Browser Stockfish is intentionally warm only while a player is still
-    // actively in a live game. Once Play is safely settled, free its Worker
-    // and bounded hash instead of carrying that memory into other workspaces.
-    botClient.current?.releaseIdleBrowserRuntime()
+    // Keep an engine warm only while a player is actively in a live game.
+    // Once Play is safely settled, browser Workers are disposed and desktop is
+    // asked to return its idle NNUE/Hash allocation without interrupting a
+    // newer Play, Verify or Review task.
+    botClient.current?.releaseIdleRuntime()
   }, [engineProbeActive, gameFinished, premoveWindow, tab, thinking])
 
   useEffect(() => {
@@ -3030,12 +3037,14 @@ export default function App() {
               <div className="board-status">
                 <div className="board-status__summary">
                   <span
+                    className="board-status__full"
                     role={latestBotMove ? 'status' : undefined}
                     aria-live={latestBotMove ? 'polite' : undefined}
                     aria-atomic={latestBotMove ? true : undefined}
                     aria-label={boardStatusLabel}
                     title={boardStatusLabel}
                   >{boardStatus}</span>
+                  <span className="board-status__compact" aria-hidden="true">{compactBoardStatus}</span>
                   <strong>Material {formatEvaluation(evaluateMaterial(previewGame, 'w'))}</strong>
                 </div>
                 <div className="board-status__actions">

@@ -140,6 +140,11 @@ export class StockfishClient {
     this.activeRequestId = null
     void this.invoke('stockfish_stop', { requestId }).catch(() => undefined)
   }
+
+  /** Ask the shared desktop engine pool to drop a process only if it is idle. */
+  releaseIdle(): void {
+    void this.invoke('stockfish_release_idle').catch(() => undefined)
+  }
 }
 
 export class HybridEngineClient {
@@ -224,6 +229,21 @@ export class HybridEngineClient {
     this.browserStockfish = null
     this.fallback?.dispose()
     this.fallback = null
+  }
+
+  /**
+   * Releases the matching Play runtime after the caller has established that
+   * no move, premove or verification is active. Desktop uses the shared pool's
+   * non-blocking `try_lock` release, so a newly acquired Play/Review task wins
+   * the race and keeps its native engine untouched.
+   */
+  releaseIdleRuntime(): void {
+    if (this.disposed) return
+    if (this.desktop) {
+      this.stockfish.releaseIdle()
+      return
+    }
+    this.releaseIdleBrowserRuntime()
   }
 
   dispose(): void {

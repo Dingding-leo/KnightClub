@@ -1,9 +1,9 @@
 /**
- * Decides when Play's browser-only engine workers can be released without
- * interrupting a live reply or a manual engine probe. Keeping this policy
- * pure makes the async worker lifecycle explicit and regression-testable.
+ * Decides when Play's retained engine runtime can be released without
+ * interrupting a live reply or a manual engine probe. Browser workers and the
+ * shared desktop UCI process follow the same user-visible safety boundary.
  */
-export interface PlayBrowserRuntimeState {
+export interface PlayRuntimeState {
   outsidePlay: boolean
   gameFinished: boolean
   premoveWindow: boolean
@@ -11,13 +11,13 @@ export interface PlayBrowserRuntimeState {
   engineProbeActive: boolean
 }
 
-export function shouldReleaseIdlePlayBrowserRuntime({
+export function shouldReleaseIdlePlayRuntime({
   outsidePlay,
   gameFinished,
   premoveWindow,
   thinking,
   engineProbeActive,
-}: PlayBrowserRuntimeState): boolean {
+}: PlayRuntimeState): boolean {
   return (outsidePlay || gameFinished)
     && !premoveWindow
     && !thinking

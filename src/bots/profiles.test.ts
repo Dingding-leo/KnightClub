@@ -48,6 +48,20 @@ describe('local bot profiles', () => {
     }
   })
 
+  it('gives the default opponent a local e4 response before an engine is needed', () => {
+    const rowan = botProfileForId(DEFAULT_BOT_PROFILE_ID)
+    const game = new Chess()
+
+    game.move('e4')
+    expect(selectProfileOpeningMove(game, STANDARD_START_FEN, 'b', rowan, game.history()))
+      .toEqual({ from: 'e7', to: 'e5' })
+
+    game.move('e5')
+    game.move('Nf3')
+    expect(selectProfileOpeningMove(game, STANDARD_START_FEN, 'b', rowan, game.history()))
+      .toEqual({ from: 'b8', to: 'c6' })
+  })
+
   it('never guesses a cue for the wrong route, wrong side or a custom position', () => {
     const mira = botProfileForId('mira-vale')
     const wrongRoute = new Chess()

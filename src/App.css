@@ -290,7 +290,9 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .board-status__summary { min-width: 0; display: flex; align-items: baseline; gap: 9px; }
-.board-status__summary span { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.board-status__full,
+.board-status__compact { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.board-status__compact { display: none; }
 .board-status strong { color: var(--accent); font-size: 10px; letter-spacing: .03em; }
 .board-status__actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; }
 .board-return-live {
@@ -2041,6 +2043,20 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
 
 @media (max-width: 430px) {
   .app-main { padding-right: 7px; padding-left: 7px; }
+  /* Keep the complete polite announcement accessible, but reserve the narrow
+     visual line for the actionable SAN/premove cue. */
+  .board-status__full {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .board-status__compact { display: block; min-width: 0; }
   .board-toolbar { grid-template-columns: repeat(6, minmax(0, 1fr)); border-radius: 10px; }
   .board-toolbar button { min-height: 44px; padding: 0 6px; font-size: 10px; }
   .board-toolbar__game-action { grid-column: span 2; }
