@@ -118,6 +118,7 @@ import {
 import { HybridEngineClient, isTauriRuntime, type EngineSearchResult } from './engine/stockfishClient'
 import { engineSettingsLabel, normalizeEngineSettings } from './engine/engineSettings'
 import { playEngineFailureStatus, playEngineStatusUpdate } from './engine/playEngineStatus'
+import { remainingPlayReplyPacingMs } from './engine/playReplyPacing'
 import { shouldReleaseIdlePlayRuntime } from './engine/playRuntimeLifecycle'
 import { requestPlayMove } from './engine/playMoveRequest'
 import {
@@ -287,15 +288,6 @@ const QUICK_TIME_CONTROLS = [
   { control: getTimeControl('blitz-5'), shortLabel: '5 min' },
   { control: getTimeControl('rapid-10'), shortLabel: '10 min' },
 ] as const
-
-// Search budgets stay deliberately modest. This floor is presentation-only:
-// it keeps a light search from looking like an accidental instant move without
-// keeping Stockfish on the CPU after it has already found an answer.
-const BOT_MOVE_DISPLAY_FLOOR_MS: Readonly<Record<BotLevel, number>> = {
-  easy: 260,
-  balanced: 360,
-  strong: 480,
-}
 
 function mergeRetryItems(...collections: ReadonlyArray<readonly RetryItem[]>): RetryItem[] {
   const byKey = new Map<string, RetryItem>()
@@ -2904,7 +2896,7 @@ export default function App() {
       const chosen = result.provider === 'stockfish'
         ? selectProfileCandidateMove(game, botProfile, result.move, result.candidates)
         : { move: result.move, usedStyle: false }
-      await waitForPacing(Math.max(0, BOT_MOVE_DISPLAY_FLOOR_MS[botLevel] - (Date.now() - requestedAt)))
+      await waitForPacing(remainingPlayReplyPacingMs(botLevel, Date.now() - requestedAt))
       if (version !== botRequestVersion.current) return
       if (game.fen() !== requestFen) return
       let next = cloneGame(game, startFen, verbose)
