@@ -26,7 +26,7 @@
 - [ ] Optional verified Stockfish downloader
 - [x] Robust UCI bridge with cancellation, monotonic native Play stop watermark, timeouts, restart, stale-result rejection and pre-setup queued-request cancellation
 - [x] Progressive, responsive Play setup with draft-local custom time controls
-- [x] Configurable threads, Hash, MultiPV, depth, nodes and move time for bot play
+- [x] Configurable threads, Hash, MultiPV, depth, nodes and move time as persisted engine preferences; live Play keeps a separately enforced low-resource ceiling
 - [x] First three strength presets using UCI Elo, skill, time, threads and hash controls
 - [x] White, Black and resolved-random colour selection for local bot games
 - [x] Single safe non-persisted premove during a local bot turn, with final legality checked after the bot reply
@@ -80,7 +80,7 @@
 
 ## Phase 5 — Product polish
 
-- [x] On-demand engine startup, non-Play workspace code splitting/prefetch, progressive in-game setup disclosure, single-thread/node-bounded play presets (50/60/90 ms and 1k/3k/7k nodes), isolated live-clock repainting, memoized board-square and review-progress interaction, shared Play history/PGN snapshots, lazy desktop library hydration, coalesced active-session persistence, cached acknowledged UCI options and bot-over-review engine priority
+- [x] On-demand engine startup and post-first-use PWA engine caching, non-Play workspace code splitting/prefetch, progressive in-game setup disclosure, single-thread/node-bounded play presets (50/60/90 ms and 1k/3k/7k nodes), isolated live-clock repainting, memoized board-square and review-progress interaction, shared Play history/PGN snapshots, lazy desktop library hydration, idle-batched active-session persistence with page-exit/terminal flushes, cached acknowledged UCI options and bot-over-review engine priority
 - [x] Live Play PGN serialization from cached verbose moves, preserving immediate autosave/export, setup/result metadata and a conservative annotated-game fallback
 - [ ] Keyboard-complete navigation and screen-reader audit
 - [ ] Multiple original board/piece themes and optional sounds

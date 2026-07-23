@@ -20,7 +20,7 @@ Full-game review reuses this command sequentially rather than starting an unboun
 
 ## Browser asset pipeline
 
-`stockfish@18.0.8` is pinned exactly in the lockfile. Before development and production builds, `scripts/sync-stockfish.mjs` verifies the JavaScript and WebAssembly SHA-256 values, copies only the lite single-threaded pair, copies GPLv3 `COPYING.txt`, and writes `SOURCE.txt` with the exact corresponding source revision. Generated assets stay out of Git. Production PWA builds precache all four files, so bot play and Review continue to work offline after installation.
+`stockfish@18.0.8` is pinned exactly in the lockfile. Before development and production builds, `scripts/sync-stockfish.mjs` verifies the JavaScript and WebAssembly SHA-256 values, copies only the lite single-threaded pair, copies GPLv3 `COPYING.txt`, and writes `SOURCE.txt` with the exact corresponding source revision. Generated assets stay out of Git. Production PWAs precache the lightweight app shell and licensing files, but deliberately leave the optional Worker/WebAssembly pair out of first-visit installation. A narrow cache-first runtime route stores that pair after the player first uses bot Play or Review, so later use remains offline without making the board wait for a 7 MB engine download.
 
 The browser build always uses one engine thread and caps Hash at 128 MB. This avoids cross-origin-isolation requirements and the download/initialization cost of the full build while retaining a much stronger engine than the bundled fallback bot.
 
@@ -66,7 +66,7 @@ npm run test:rust
 KNIGHTCLUB_RUN_STOCKFISH_SMOKE=1 cargo test --manifest-path src-tauri/Cargo.toml --test stockfish_smoke
 ```
 
-The TypeScript suite covers browser handshake, settings, UCI parsing, best-move search, cancellation and checksum-backed asset generation. The production build verifies the WebAssembly assets are present in the offline precache. The Rust smoke target uses an installed native Stockfish for both one-move play and real three-line MultiPV analysis; it remains opt-in so contributors without a native executable can run the deterministic suite.
+The TypeScript suite covers browser handshake, settings, UCI parsing, best-move search, cancellation, checksum-backed asset generation and the narrow runtime-cache route. The production build verifies the Worker/WebAssembly pair is absent from the initial precache and present in the cache-first engine route. The Rust smoke target uses an installed native Stockfish for both one-move play and real three-line MultiPV analysis; it remains opt-in so contributors without a native executable can run the deterministic suite.
 
 ## Licence boundary
 

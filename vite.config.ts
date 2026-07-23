@@ -1,8 +1,37 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import type { GenerateSWOptions, RuntimeCaching } from 'workbox-build'
 
 const base = process.env.KNIGHTCLUB_BASE ?? '/'
+
+export const STOCKFISH_RUNTIME_CACHE_NAME = 'knightclub-stockfish-runtime'
+
+/**
+ * Stockfish is a 7 MB optional capability. Keep it out of the app-shell
+ * precache so the board becomes usable promptly, then retain it locally after
+ * its first Play or Review request for offline use.
+ */
+export const stockfishRuntimeCacheRoute: RuntimeCaching = {
+  urlPattern: /\/stockfish\/stockfish-18-lite-single\.(?:js|wasm)$/,
+  handler: 'CacheFirst',
+  options: {
+    cacheName: STOCKFISH_RUNTIME_CACHE_NAME,
+    cacheableResponse: { statuses: [0, 200] },
+    expiration: {
+      maxEntries: 2,
+      maxAgeSeconds: 30 * 24 * 60 * 60,
+    },
+  },
+}
+
+export const knightclubWorkbox: Partial<GenerateSWOptions> = {
+  // Do not turn an optional engine into a mandatory first-visit download.
+  // Other static assets still precache as the offline app shell.
+  globPatterns: ['**/*.{js,css,html,svg,ico,png,woff2,wav,txt}'],
+  globIgnores: ['**/stockfish/stockfish-18-lite-single.js'],
+  runtimeCaching: [stockfishRuntimeCacheRoute],
+}
 
 export default defineConfig({
   base,
@@ -43,10 +72,7 @@ export default defineConfig({
           },
         ],
       },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,ico,png,woff2,wav,wasm,txt}'],
-        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
-      },
+      workbox: knightclubWorkbox,
     }),
   ],
   test: {

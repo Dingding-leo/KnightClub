@@ -15,3 +15,12 @@ export function handoffWorkspace(previous: string, next: string, port: Workspace
   port.focusWorkspace()
   return true
 }
+
+/**
+ * A Review → Train target is a navigation payload, not a sticky training
+ * preference. Keep it for the active Train visit (including optional mastered
+ * replays), then return later visits to the normal due-first queue.
+ */
+export function shouldClearRequestedRetryOnWorkspaceExit(previous: string, next: string): boolean {
+  return previous === 'train' && next !== 'train'
+}

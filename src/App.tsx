@@ -107,7 +107,7 @@ import {
   previewPlyAfterShortcut,
   type PlayPreviewNavigation as PlayPreviewNavigationAction,
 } from './domain/playPreview'
-import { handoffWorkspace } from './domain/workspaceNavigation'
+import { handoffWorkspace, shouldClearRequestedRetryOnWorkspaceExit } from './domain/workspaceNavigation'
 import { terminalSessionFingerprint } from './domain/libraryIdentity'
 import { shouldShowLiveGameDock } from './domain/liveGameDock'
 import {
@@ -146,9 +146,11 @@ import {
   saveGame,
   savePreferences,
   updateGame,
+  type ActiveSession,
   type StoredGame,
 } from './storage/gameStore'
 import { DatabaseClient } from './storage/databaseClient'
+import { ActiveSessionPersistence } from './storage/activeSessionPersistence'
 import { LibraryHydrationClient } from './storage/libraryHydrationClient'
 import {
   createReviewKeyFromMoves,
@@ -592,6 +594,8 @@ export default function App() {
   const tacticsHydrationClient = useRef<TacticsHydrationClient | null>(null)
   const tacticsStateRef = useRef(tacticsState)
   const tacticsWriteQueue = useRef<Promise<void>>(Promise.resolve())
+  const activeSessionPersistence = useRef<ActiveSessionPersistence | null>(null)
+  const activeSessionPersistRef = useRef<(session: ActiveSession) => void>(() => {})
   const libraryRequestVersion = useRef(0)
   const pendingNativeGameSaves = useRef<StoredGame[]>([])
   const librarySearchTextCache = useRef(new WeakMap<StoredGame, string>())
@@ -1042,6 +1046,25 @@ export default function App() {
     })
   }, [])
 
+  // The browser mirror is deliberately written outside the move's critical
+  // rendering path. It remains a synchronous final fallback at terminal and
+  // page-exit boundaries; native SQLite uses the same latest-wins snapshot.
+  activeSessionPersistRef.current = (session) => {
+    try {
+      saveActiveSession(session)
+    } catch (error) {
+      reportDatabaseError(error)
+    }
+    if (database && databaseReady) void database.saveActiveSession(session).catch(reportDatabaseError)
+  }
+
+  const getActiveSessionPersistence = useCallback(() => {
+    activeSessionPersistence.current ??= new ActiveSessionPersistence((session) => {
+      activeSessionPersistRef.current(session)
+    })
+    return activeSessionPersistence.current
+  }, [])
+
   const loadDesktopLibrary = useCallback(() => {
     if (!database || !databaseReady || libraryLoadState !== 'idle') return
     const requestVersion = ++libraryRequestVersion.current
@@ -1213,6 +1236,7 @@ export default function App() {
   }, [library, persistLibraryGameUpdate])
 
   const clearPersistedSession = () => {
+    activeSessionPersistence.current?.discard()
     clearActiveSession()
     if (database && databaseReady) void database.clearActiveSession().catch(reportDatabaseError)
   }
@@ -1984,12 +2008,31 @@ export default function App() {
   }, [cancelBrowserLibraryHydration, desktop, hydrateBrowserLibrary, libraryWorkspaceOpen, loadDesktopLibrary])
 
   useEffect(() => {
-    const session = {
+    const session: ActiveSession = {
       pgn: sharePgn, startFen, mode, botLevel, botProfileId, orientation, humanColor, colorChoice, timeControl, clock, clockHistory, termination,
     }
-    saveActiveSession(session)
-    if (database && databaseReady) void database.saveActiveSession(session).catch(reportDatabaseError)
-  }, [game, startFen, mode, botLevel, botProfileId, orientation, humanColor, colorChoice, timeControl, clock, clockHistory, termination, sharePgn, database, databaseReady, reportDatabaseError])
+    const persistence = getActiveSessionPersistence()
+    persistence.schedule(session)
+    // A completed game is already a durable library record. Flush the active
+    // session too, so closing immediately after a checkmate cannot lose its
+    // final position while an idle callback is waiting.
+    if (gameFinished) persistence.flush()
+  }, [game, startFen, mode, botLevel, botProfileId, orientation, humanColor, colorChoice, timeControl, clock, clockHistory, termination, sharePgn, gameFinished, databaseReady, getActiveSessionPersistence])
+
+  useEffect(() => {
+    const flush = () => activeSessionPersistence.current?.flush()
+    const flushWhenHidden = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', flushWhenHidden)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', flushWhenHidden)
+      flush()
+      activeSessionPersistence.current = null
+    }
+  }, [])
 
   useEffect(() => {
     const preferences = { soundsEnabled, engine: engineSettings, botProfileId }
@@ -2001,6 +2044,11 @@ export default function App() {
     const previous = previousWorkspace.current
     previousWorkspace.current = tab
     if (previous === tab) return
+
+    // Review hands a specifically chosen moment to the current Train visit.
+    // Once that visit ends, do not keep pinning it over a later due-first
+    // queue (including after the moment has already been mastered).
+    if (shouldClearRequestedRetryOnWorkspaceExit(previous, tab)) setRequestedRetryKey(null)
 
     const frame = window.requestAnimationFrame(() => {
       handoffWorkspace(previous, tab, {
