@@ -14,6 +14,8 @@ import {
   assertPersistedReview,
   assertPersistedReviewForSave,
   isReviewKey,
+  persistedReviewForPreparedSave,
+  type PreparedPersistedReview,
   type PersistedReview,
 } from '../review/reviewPersistence'
 import {
@@ -285,6 +287,16 @@ export class DatabaseClient {
 
   async saveReview(review: PersistedReview): Promise<void> {
     assertPersistedReviewForSave(review)
+    await this.enqueue(() => this.invoke('database_save_review', { review }).then(() => undefined))
+  }
+
+  /**
+   * A completed report prepared by KnightClub's dedicated Worker already has
+   * its canonical PGN/source proof. Preserve the public `saveReview` validator
+   * above for every ordinary caller while avoiding a second renderer replay.
+   */
+  async savePreparedReview(prepared: PreparedPersistedReview): Promise<void> {
+    const review = persistedReviewForPreparedSave(prepared)
     await this.enqueue(() => this.invoke('database_save_review', { review }).then(() => undefined))
   }
 

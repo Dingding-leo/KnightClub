@@ -112,12 +112,14 @@ import {
 } from './moveListPagination'
 import { saveRetryItemsSerially } from '../review/retryQueuePersistence'
 import {
-  createPersistedReview,
   createReviewKey,
   MAX_REVIEW_PLIES,
   type HydratedPersistedReview,
+  preparedPersistedReviewMetadata,
+  type PreparedPersistedReview,
   type PersistedReview,
 } from '../review/reviewPersistence'
+import type { ReviewPersistencePreparationInput } from '../review/reviewPersistenceProtocol'
 import { ChessBoard } from './ChessBoard'
 import { ChessPiece } from './ChessPiece'
 
@@ -135,9 +137,10 @@ interface AnalysisWorkspaceProps {
   reviewStore?: {
     load: (reviewKey: string) => Promise<HydratedPersistedReview | null>
     cancelLoad?: (message?: string) => void
-    save: (review: PersistedReview) => Promise<void>
+    prepare: (input: ReviewPersistencePreparationInput) => Promise<PreparedPersistedReview>
+    save: (review: PersistedReview | PreparedPersistedReview) => Promise<void>
   }
-  onReviewSaved?: (review: PersistedReview) => void
+  onReviewSaved?: (review: Pick<PersistedReview, 'reviewKey'>) => void
   retryStore?: {
     load: (retryKey: string) => Promise<RetryItem | null>
     save: (item: RetryItem) => Promise<void>
@@ -1437,17 +1440,32 @@ export function AnalysisWorkspace({
       setReviewOrigin(null)
       setReviewProgress(null)
       if (!reviewStore) return
+      const sourcePgn = timeline.source === 'pgn' ? timeline.sourcePgn : null
+      if (!sourcePgn || !reviewKey) {
+        setReviewError('Review is ready, but its source cannot be prepared for local saving.')
+        return
+      }
       setReviewSaving(true)
+      const reviewedAt = new Date().toISOString()
+      const expected = {
+        reviewKey,
+        sourcePgn,
+        startFen: timeline.startFen,
+        moveCount: timeline.moves.length,
+        reviewedAt,
+      }
       afterNextPaint(() => {
-        try {
-          const record = createPersistedReview(timeline, result)
-          void saveCompletedReviewInBackground({
+        // The report is visible before this detached preparation begins. Its
+        // strict clone and canonical PGN proof happen in a serial local Worker
+        // so a long completed Review cannot hitch the interaction thread.
+        void reviewStore.prepare({ sourcePgn, expected, report: result })
+          .then((prepared) => saveCompletedReviewInBackground({
             save: (savedRecord) => reviewStore.save(savedRecord),
-            record,
+            record: prepared,
             isCurrent: () => isReviewRunCurrent(runVersion),
             // This updates durable Library/Insights metadata. It intentionally
             // survives leaving Review after the database write has succeeded.
-            onPersisted: (savedRecord) => onReviewSaved?.(savedRecord),
+            onPersisted: (savedRecord) => onReviewSaved?.(preparedPersistedReviewMetadata(savedRecord)),
             onSaved: () => {
               setReviewSaving(false)
               setReviewOrigin('saved')
@@ -1458,14 +1476,14 @@ export function AnalysisWorkspace({
                 ? `Review is ready, but it could not be saved locally: ${error.message}`
                 : 'Review is ready, but it could not be saved locally.')
             },
+          }))
+          .catch((error: unknown) => {
+            if (!isReviewRunCurrent(runVersion)) return
+            setReviewSaving(false)
+            setReviewError(error instanceof Error
+              ? `Review is ready, but it could not be saved locally: ${error.message}`
+              : 'Review is ready, but it could not be saved locally.')
           })
-        } catch (error) {
-          if (!isReviewRunCurrent(runVersion)) return
-          setReviewSaving(false)
-          setReviewError(error instanceof Error
-            ? `Review is ready, but it could not be saved locally: ${error.message}`
-            : 'Review is ready, but it could not be saved locally.')
-        }
       })
     } catch (error) {
       if (isReviewRunCurrent(runVersion) && !(error instanceof Error && error.name === 'AbortError')) {

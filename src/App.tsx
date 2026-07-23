@@ -171,11 +171,15 @@ import {
 import { LibraryHydrationClient } from './storage/libraryHydrationClient'
 import {
   createReviewKeyFromMoves,
+  isPreparedPersistedReview,
   readBrowserReviewRaw,
+  saveBrowserPreparedReview,
   saveBrowserReview,
+  type PreparedPersistedReview,
   type PersistedReview,
 } from './review/reviewPersistence'
 import { ReviewHydrationClient } from './review/reviewHydrationClient'
+import { ReviewPersistenceQueue } from './review/reviewPersistenceClient'
 import {
   deleteBrowserRetryItem,
   loadBrowserRetryItem,
@@ -694,6 +698,7 @@ export default function App() {
   const tacticsHistoryRequestVersion = useRef(0)
   const tacticsHydrationClient = useRef<TacticsHydrationClient | null>(null)
   const reviewHydrationClient = useRef<ReviewHydrationClient | null>(null)
+  const reviewPersistenceQueue = useRef<ReviewPersistenceQueue | null>(null)
   const tacticsStateRef = useRef(tacticsState)
   const tacticsWriteQueue = useRef<Promise<void>>(Promise.resolve())
   const activeSessionPersistence = useRef<ActiveSessionPersistence | null>(null)
@@ -764,6 +769,11 @@ export default function App() {
   const getReviewHydrationClient = useCallback(() => {
     reviewHydrationClient.current ??= new ReviewHydrationClient()
     return reviewHydrationClient.current
+  }, [])
+
+  const getReviewPersistenceQueue = useCallback(() => {
+    reviewPersistenceQueue.current ??= new ReviewPersistenceQueue()
+    return reviewPersistenceQueue.current
   }, [])
 
   const hydrateBrowserSavedReview = useCallback(async (reviewKey: string) => {
@@ -1409,14 +1419,20 @@ export default function App() {
       return hydrateBrowserSavedReview(reviewKey)
     },
     cancelLoad: (message?: string) => reviewHydrationClient.current?.cancel(message),
-    save: async (review: PersistedReview) => {
+    prepare: (input: Parameters<ReviewPersistenceQueue['prepare']>[0]) => {
+      return getReviewPersistenceQueue().prepare(input)
+    },
+    save: async (review: PersistedReview | PreparedPersistedReview) => {
+      const prepared = isPreparedPersistedReview(review)
       if (desktop && database && databaseReady) {
-        await database.saveReview(review)
+        if (prepared) await database.savePreparedReview(review)
+        else await database.saveReview(review)
         return
       }
-      saveBrowserReview(review)
+      if (prepared) saveBrowserPreparedReview(review)
+      else saveBrowserReview(review)
     },
-  }), [database, databaseReady, desktop, getReviewHydrationClient, hydrateBrowserSavedReview])
+  }), [database, databaseReady, desktop, getReviewHydrationClient, getReviewPersistenceQueue, hydrateBrowserSavedReview])
 
   const retryStore = useMemo(() => ({
     load: async (retryKey: string) => {
@@ -1565,7 +1581,7 @@ export default function App() {
     }
   }, [database, databaseReady, getLibraryDetailClient, persistLibraryGameUpdate, reportDatabaseError, reviewSource])
 
-  const markLinkedGameReviewed = useCallback((review: PersistedReview) => {
+  const markLinkedGameReviewed = useCallback((review: Pick<PersistedReview, 'reviewKey'>) => {
     // `reviewSource` supplies a stable direct link for legacy Library rows
     // that predate review keys. Existing matching rows remain metadata-only.
     const { games, changedGames } = linkLibraryGameSummariesToReview(
@@ -2673,6 +2689,8 @@ export default function App() {
     tacticsHydrationClient.current = null
     reviewHydrationClient.current?.dispose()
     reviewHydrationClient.current = null
+    reviewPersistenceQueue.current?.dispose()
+    reviewPersistenceQueue.current = null
   }, [])
 
   useEffect(() => {

@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { Chess } from 'chess.js'
 import { DatabaseClient, type DatabaseBootstrap, type DatabaseSnapshot } from './databaseClient'
 import { DEFAULT_PREFERENCES, toStoredGameSummary, type ActiveSession, type StoredGame } from './gameStore'
-import { createPersistedReview } from '../review/reviewPersistence'
+import {
+  createPersistedReview,
+  preparePersistedReviewFromWorker,
+} from '../review/reviewPersistence'
 import { createPgnTimeline } from '../analysis/analysisModel'
 import type { GameReview } from '../review/gameReviewRunner'
 import type { RetryItem } from '../review/retry'
@@ -135,6 +138,30 @@ describe('DatabaseClient', () => {
       await expect(client.saveReview(tampered)).rejects.toThrow('Saved review')
       expect(invoke).not.toHaveBeenCalled()
     } finally {
+      move.mockRestore()
+    }
+  })
+
+  it('saves an opaque persistence-Worker capability without replaying its canonical PGN again', async () => {
+    const invoke = vi.fn(async () => undefined)
+    const client = new DatabaseClient(invoke)
+    const workerRecord = JSON.parse(JSON.stringify(review)) as typeof review
+    const prepared = preparePersistedReviewFromWorker(workerRecord, {
+      reviewKey: workerRecord.reviewKey,
+      sourcePgn: workerRecord.sourcePgn,
+      startFen: workerRecord.startFen,
+      moveCount: workerRecord.moveCount,
+      reviewedAt: workerRecord.reviewedAt,
+    })
+    const move = vi.spyOn(Chess.prototype, 'move')
+    const loadPgn = vi.spyOn(Chess.prototype, 'loadPgn')
+    try {
+      await client.savePreparedReview(prepared)
+      expect(loadPgn).not.toHaveBeenCalled()
+      expect(move).not.toHaveBeenCalled()
+      expect(invoke).toHaveBeenCalledWith('database_save_review', { review: workerRecord })
+    } finally {
+      loadPgn.mockRestore()
       move.mockRestore()
     }
   })

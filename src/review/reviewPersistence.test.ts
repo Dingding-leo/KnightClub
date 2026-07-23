@@ -5,6 +5,7 @@ import type { GameReview } from './gameReviewRunner'
 import {
   assertPersistedReview,
   createPersistedReview,
+  createPersistedReviewFromCanonicalTimeline,
   createReviewKey,
   createReviewKeyFromMoves,
   loadBrowserReview,
@@ -110,6 +111,28 @@ describe('persisted review identity and browser storage', () => {
     } finally {
       move.mockRestore()
     }
+  })
+
+  it('keeps Worker-only canonical timeline validation strict for a tampered completed report', () => {
+    const timeline = createPgnTimeline('1. e4')
+    const tampered = report()
+    tampered.moves[0]!.to = 'd4'
+
+    expect(() => createPersistedReviewFromCanonicalTimeline(timeline, tampered)).toThrow(
+      'Saved review does not match its source game.',
+    )
+  })
+
+  it('keeps full report structure and byte bounds when reusing a canonical Worker timeline', () => {
+    const timeline = createPgnTimeline('1. e4')
+    const malformed = report()
+    malformed.moves[0]!.feedback = 'x'.repeat(4_097)
+
+    expect(() => createPersistedReviewFromCanonicalTimeline(
+      timeline,
+      malformed,
+      '2026-07-23T00:00:00.000Z',
+    )).toThrow('Saved review is invalid or too large.')
   })
 
   it('rejects a tampered cloned review before writing browser storage', () => {

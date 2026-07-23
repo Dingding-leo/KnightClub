@@ -34,6 +34,20 @@ const REVIEW_PHASES = new Set(['opening', 'middlegame', 'endgame'])
  */
 const trustedPersistedReviewSnapshots = new WeakSet<object>()
 
+/**
+ * A completed report prepared by the dedicated persistence Worker. The
+ * capability intentionally exposes no mutable report object: browser and
+ * desktop save adapters can unwrap it privately, while ordinary callers must
+ * continue through the full strict validator.
+ */
+declare const preparedPersistedReviewBrand: unique symbol
+
+export interface PreparedPersistedReview {
+  readonly [preparedPersistedReviewBrand]: true
+}
+
+const preparedPersistedReviews = new WeakMap<PreparedPersistedReview, PersistedReview>()
+
 export interface PersistedReview {
   schemaVersion: typeof REVIEW_SCHEMA_VERSION
   reviewKey: string
@@ -42,6 +56,15 @@ export interface PersistedReview {
   moveCount: number
   reviewedAt: string
   report: GameReview
+}
+
+/** Exact source facts a Worker-prepared result must still match in the UI. */
+export interface PersistedReviewPreparationExpectation {
+  reviewKey: string
+  sourcePgn: string
+  startFen: string
+  moveCount: number
+  reviewedAt: string
 }
 
 /**
@@ -258,9 +281,13 @@ function assertPersistableTimeline(timeline: AnalysisTimeline): asserts timeline
   }
 }
 
-export function createPersistedReview(timeline: AnalysisTimeline, report: GameReview, reviewedAt = new Date().toISOString()): PersistedReview {
+function persistedReviewRecord(
+  timeline: AnalysisTimeline,
+  report: GameReview,
+  reviewedAt: string,
+): PersistedReview {
   assertPersistableTimeline(timeline)
-  const record: PersistedReview = {
+  return {
     schemaVersion: REVIEW_SCHEMA_VERSION,
     reviewKey: createReviewKey(timeline),
     sourcePgn: timeline.sourcePgn,
@@ -269,15 +296,47 @@ export function createPersistedReview(timeline: AnalysisTimeline, report: GameRe
     reviewedAt,
     report,
   }
+}
+
+function freezeTrustedPersistedReview(snapshot: PersistedReview): PersistedReview {
+  const immutableSnapshot = freezeRecursively(snapshot)
+  trustedPersistedReviewSnapshots.add(immutableSnapshot)
+  return immutableSnapshot
+}
+
+export function createPersistedReview(timeline: AnalysisTimeline, report: GameReview, reviewedAt = new Date().toISOString()): PersistedReview {
+  const record = persistedReviewRecord(timeline, report, reviewedAt)
   // A completed review can contain hundreds of moves.  Detach it from the
   // live analysis report before validating, then freeze the exact value that
   // will cross the save boundary.  This lets the immediate save skip another
   // expensive PGN replay without trusting any mutable caller-owned object.
   const snapshot = clonePersistedReview(record)
   assertPersistedReview(snapshot)
-  const immutableSnapshot = freezeRecursively(snapshot)
-  trustedPersistedReviewSnapshots.add(immutableSnapshot)
-  return immutableSnapshot
+  return freezeTrustedPersistedReview(snapshot)
+}
+
+/**
+ * The persistence Worker first created this exact canonical timeline from the
+ * source PGN. Reusing that proof avoids replaying the same long game twice in
+ * the Worker while preserving the full report/source consistency checks.
+ *
+ * This is intentionally not a general UI shortcut: callers on the interaction
+ * thread must use `createPersistedReview`, whose strict validation reparses
+ * untrusted timeline input from its source PGN.
+ */
+export function createPersistedReviewFromCanonicalTimeline(
+  timeline: AnalysisTimeline,
+  report: GameReview,
+  reviewedAt = new Date().toISOString(),
+): PersistedReview {
+  const record = persistedReviewRecord(timeline, report, reviewedAt)
+  const snapshot = clonePersistedReview(record)
+  // Reuse only the canonical PGN proof, never the structural trust. The
+  // completed report can still contain malformed or oversized nested fields,
+  // so retain the same full schema/byte validation before accepting it.
+  assertPersistedReviewStructure(snapshot)
+  assertPersistedReviewAgainstTimeline(snapshot, timeline)
+  return freezeTrustedPersistedReview(snapshot)
 }
 
 export function isPersistedReview(value: unknown): value is PersistedReview {
@@ -295,6 +354,13 @@ export function isPersistedReview(value: unknown): value is PersistedReview {
  * render path for restored long games.
  */
 export function hydratePersistedReview(value: unknown): HydratedPersistedReview {
+  const record = assertPersistedReviewStructure(value)
+  const timeline = createPgnTimeline(record.sourcePgn)
+  assertPersistedReviewAgainstTimeline(record, timeline)
+  return { record, timeline }
+}
+
+function assertPersistedReviewStructure(value: unknown): PersistedReview {
   if (!isObject(value)
     || value.schemaVersion !== REVIEW_SCHEMA_VERSION
     || !isReviewKey(value.reviewKey)
@@ -309,15 +375,16 @@ export function hydratePersistedReview(value: unknown): HydratedPersistedReview 
     throw new Error('Saved review is invalid or too large.')
   }
 
-  const record = value as unknown as PersistedReview
-  const timeline = createPgnTimeline(record.sourcePgn)
+  return value as unknown as PersistedReview
+}
+
+function assertPersistedReviewAgainstTimeline(record: PersistedReview, timeline: AnalysisTimeline): void {
   if (timeline.startFen !== record.startFen
     || timeline.moves.length !== record.moveCount
     || createReviewKey(timeline) !== record.reviewKey
     || !matchesSourceTimeline(record.report.moves, timeline)) {
     throw new Error('Saved review does not match its source game.')
   }
-  return { record, timeline }
 }
 
 export function assertPersistedReview(value: unknown): asserts value is PersistedReview {
@@ -333,6 +400,52 @@ export function assertPersistedReview(value: unknown): asserts value is Persiste
 export function assertPersistedReviewForSave(value: unknown): asserts value is PersistedReview {
   if (isObject(value) && trustedPersistedReviewSnapshots.has(value)) return
   assertPersistedReview(value)
+}
+
+/**
+ * Accept only a matching result from KnightClub's persistence Worker. The
+ * Worker owns the expensive clone, byte bound and canonical PGN replay; this
+ * lightweight guard binds its structured-clone output to the exact source the
+ * UI submitted without recreating that replay on the interaction thread.
+ */
+export function preparePersistedReviewFromWorker(
+  value: unknown,
+  expected: PersistedReviewPreparationExpectation,
+): PreparedPersistedReview {
+  if (!isPersistedReviewEnvelope(value)) {
+    throw new Error('Review persistence Worker returned an invalid result.')
+  }
+  const record = value as PersistedReview
+  if (record.reviewKey !== expected.reviewKey
+    || record.sourcePgn !== expected.sourcePgn
+    || record.startFen !== expected.startFen
+    || record.moveCount !== expected.moveCount
+    || record.reviewedAt !== expected.reviewedAt) {
+    throw new Error('Review persistence Worker returned a mismatched result.')
+  }
+  const prepared = Object.freeze({}) as unknown as PreparedPersistedReview
+  preparedPersistedReviews.set(prepared, record)
+  return prepared
+}
+
+export function isPreparedPersistedReview(value: unknown): value is PreparedPersistedReview {
+  return typeof value === 'object'
+    && value !== null
+    && preparedPersistedReviews.has(value as PreparedPersistedReview)
+}
+
+/** Save adapters use this private capability rather than exposing its mutable report. */
+export function persistedReviewForPreparedSave(prepared: PreparedPersistedReview): PersistedReview {
+  const record = preparedPersistedReviews.get(prepared)
+  if (!record) throw new Error('Prepared review save is invalid.')
+  return record
+}
+
+/** Linked Library metadata needs only the canonical review identity. */
+export function preparedPersistedReviewMetadata(
+  prepared: PreparedPersistedReview,
+): Pick<PersistedReview, 'reviewKey'> {
+  return { reviewKey: persistedReviewForPreparedSave(prepared).reviewKey }
 }
 
 function browserStorage(storage?: ReviewStorage): ReviewStorage | null {
@@ -473,6 +586,21 @@ export function hydrateBrowserReviewRaw(
 
 export function saveBrowserReview(record: PersistedReview, storage?: ReviewStorage): void {
   assertPersistedReviewForSave(record)
+  const target = browserStorage(storage)
+  if (!target) throw new Error('Local review storage is unavailable.')
+  const next = insertBrowserReview(readBrowserReviewSnapshot(target).items, record)
+  const serialized = JSON.stringify(next)
+  target.setItem(REVIEW_STORAGE_KEY, serialized)
+  cacheBrowserReviewEnvelopes(target, serialized, next)
+}
+
+/**
+ * The record behind this opaque capability was strictly validated in the
+ * dedicated Worker. Keep the normal public save path above strict for every
+ * ordinary/deserialized caller.
+ */
+export function saveBrowserPreparedReview(prepared: PreparedPersistedReview, storage?: ReviewStorage): void {
+  const record = persistedReviewForPreparedSave(prepared)
   const target = browserStorage(storage)
   if (!target) throw new Error('Local review storage is unavailable.')
   const next = insertBrowserReview(readBrowserReviewSnapshot(target).items, record)

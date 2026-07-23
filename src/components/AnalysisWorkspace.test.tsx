@@ -453,6 +453,7 @@ describe('analysis workspace convenience contracts', () => {
   it('keeps the costly full-review action unavailable while a matching saved report is loading', () => {
     const reviewStore = {
       load: vi.fn(async () => null),
+      prepare: vi.fn(async () => { throw new Error('Not used while rendering.') }),
       save: vi.fn(async () => undefined),
     }
     const markup = renderToStaticMarkup(

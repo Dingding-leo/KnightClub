@@ -1,16 +1,14 @@
-import type { PersistedReview } from './reviewPersistence'
-
-interface BackgroundReviewSave {
-  save: (review: PersistedReview) => Promise<void>
-  record: PersistedReview
+interface BackgroundReviewSave<T> {
+  save: (review: T) => Promise<void>
+  record: T
   isCurrent: () => boolean
   /**
    * A durable application-level notification. Unlike UI callbacks, this must
    * run after a successful write even when the originating workspace has been
    * replaced, so linked library metadata can remain truthful.
    */
-  onPersisted: (review: PersistedReview) => void
-  onSaved: (review: PersistedReview) => void
+  onPersisted: (review: T) => void
+  onSaved: (review: T) => void
   onFailed: (error: unknown) => void
 }
 
@@ -20,14 +18,14 @@ interface BackgroundReviewSave {
  * always informs app-level metadata, while the current-run check prevents a
  * late completion from changing a newer workspace's UI.
  */
-export async function saveCompletedReviewInBackground({
+export async function saveCompletedReviewInBackground<T>({
   save,
   record,
   isCurrent,
   onPersisted,
   onSaved,
   onFailed,
-}: BackgroundReviewSave): Promise<void> {
+}: BackgroundReviewSave<T>): Promise<void> {
   try {
     await save(record)
   } catch (error) {
