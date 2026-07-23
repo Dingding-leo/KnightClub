@@ -2,8 +2,11 @@ import type { ActiveSession } from './gameStore'
 import {
   hydrateActiveSession,
   hydrateActiveSessionRaw,
+  hydrateStoredGame,
   reviveHydratedActiveSession,
+  reviveHydratedStoredGame,
   type HydratedActiveSession,
+  type HydratedStoredGame,
 } from './activeSessionHydration'
 import type {
   ActiveSessionHydrationRequest,
@@ -25,13 +28,16 @@ export type ActiveSessionHydrationWorkerFactory = () => ActiveSessionHydrationWo
 type PendingRequest = {
   id: number
   request: ActiveSessionHydrationRequest
-  resolve: (value: HydratedActiveSession | null) => void
+  resolve: (value: HydrationValue) => void
   reject: (reason: Error) => void
 }
 
 type ActiveSessionHydrationInput =
   | { type: 'hydrate-active-session-raw'; raw: string | null }
   | { type: 'hydrate-active-session'; session: ActiveSession | null }
+  | { type: 'hydrate-stored-game'; pgn: string }
+
+type HydrationValue = HydratedActiveSession | HydratedStoredGame | null
 
 function abortError(message: string): Error {
   return new DOMException(message, 'AbortError')
@@ -51,7 +57,8 @@ function defaultWorkerFactory(): ActiveSessionHydrationWorkerLike {
 /**
  * This client starts no Worker in its constructor. Both its Worker and its
  * restricted-runtime fallback are latest-wins and intentionally begin only
- * after React has had a chance to paint Play's recovery shell.
+ * after React has had a chance to paint either Play's recovery or saved-game
+ * opening shell.
  */
 export class ActiveSessionHydrationClient {
   private readonly createWorker: ActiveSessionHydrationWorkerFactory
@@ -71,11 +78,16 @@ export class ActiveSessionHydrationClient {
   }
 
   hydrateRaw(raw: string | null): Promise<HydratedActiveSession | null> {
-    return this.request({ type: 'hydrate-active-session-raw', raw })
+    return this.request({ type: 'hydrate-active-session-raw', raw }) as Promise<HydratedActiveSession | null>
   }
 
   hydrate(session: ActiveSession | null): Promise<HydratedActiveSession | null> {
-    return this.request({ type: 'hydrate-active-session', session })
+    return this.request({ type: 'hydrate-active-session', session }) as Promise<HydratedActiveSession | null>
+  }
+
+  /** Replays one explicitly selected Library PGN without synthetic session metadata. */
+  hydrateStoredGame(pgn: string): Promise<HydratedStoredGame> {
+    return this.request({ type: 'hydrate-stored-game', pgn }) as Promise<HydratedStoredGame>
   }
 
   cancel(message = 'Saved game restoration cancelled.'): void {
@@ -97,9 +109,11 @@ export class ActiveSessionHydrationClient {
     this.releaseWorker()
   }
 
-  private request(input: ActiveSessionHydrationInput): Promise<HydratedActiveSession | null> {
+  private request(input: ActiveSessionHydrationInput): Promise<HydrationValue> {
     if (this.disposed) return Promise.reject(new Error('Saved game restoration client is disposed.'))
-    this.cancel('Superseded by a newer saved game restoration request.')
+    this.cancel(input.type === 'hydrate-stored-game'
+      ? 'Superseded by a newer saved game opening request.'
+      : 'Superseded by a newer saved game restoration request.')
     const request = { ...input, id: this.nextId++ } as ActiveSessionHydrationRequest
     return new Promise((resolve, reject) => {
       this.pending = { id: request.id, request, resolve, reject }
@@ -137,10 +151,24 @@ export class ActiveSessionHydrationClient {
       this.fallbackTimer = null
       if (!this.pending || this.pending.id !== request.id) return
       try {
-        const hydrated = request.type === 'hydrate-active-session-raw'
-          ? hydrateActiveSessionRaw(request.raw)
-          : hydrateActiveSession(request.session)
-        this.finishSuccess(request.id, reviveHydratedActiveSession(hydrated))
+        if (request.type === 'hydrate-stored-game') {
+          // A selected long Library record promised a cancellable background
+          // open. A blocked Worker must not silently replay it on the UI
+          // thread and make the Cancel action unreachable.
+          if (shouldHydrateStoredGameInBackground(request.pgn)) {
+            this.finishError(
+              request.id,
+              new Error('This saved game needs a local background Worker to open safely.'),
+            )
+            return
+          }
+          this.finishSuccess(request.id, reviveHydratedStoredGame(hydrateStoredGame(request.pgn)))
+        } else {
+          const hydrated = request.type === 'hydrate-active-session-raw'
+            ? hydrateActiveSessionRaw(request.raw)
+            : hydrateActiveSession(request.session)
+          this.finishSuccess(request.id, reviveHydratedActiveSession(hydrated))
+        }
       } catch (error) {
         this.finishError(
           request.id,
@@ -169,7 +197,17 @@ export class ActiveSessionHydrationClient {
       return
     }
     try {
-      this.finishSuccess(response.id, reviveHydratedActiveSession(response.hydrated), worker)
+      if (response.type === 'stored-game-result'
+        && pending.request.type === 'hydrate-stored-game') {
+        this.finishSuccess(response.id, reviveHydratedStoredGame(response.hydrated), worker)
+        return
+      }
+      if (response.type === 'active-session-result'
+        && pending.request.type !== 'hydrate-stored-game') {
+        this.finishSuccess(response.id, reviveHydratedActiveSession(response.hydrated), worker)
+        return
+      }
+      this.finishError(response.id, new Error('Saved game Worker returned an unexpected result.'), worker)
     } catch (error) {
       this.finishError(
         response.id,
@@ -181,7 +219,7 @@ export class ActiveSessionHydrationClient {
 
   private finishSuccess(
     id: number,
-    value: HydratedActiveSession | null,
+    value: HydrationValue,
     worker?: ActiveSessionHydrationWorkerLike,
   ): void {
     const pending = this.pending
@@ -213,4 +251,13 @@ export class ActiveSessionHydrationClient {
 /** A raw-size check only; it must not parse an active PGN during render. */
 export function shouldHydrateActiveSessionInBackground(raw: string | null): boolean {
   return raw !== null && raw.length > BACKGROUND_ACTIVE_SESSION_HYDRATION_THRESHOLD_CHARS
+}
+
+/**
+ * Library records are already selected before this check. Use character count
+ * only: encoding a large PGN here would recreate the main-thread work this
+ * background opener exists to avoid.
+ */
+export function shouldHydrateStoredGameInBackground(pgn: string): boolean {
+  return pgn.length > BACKGROUND_ACTIVE_SESSION_HYDRATION_THRESHOLD_CHARS
 }

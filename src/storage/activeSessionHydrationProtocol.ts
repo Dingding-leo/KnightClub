@@ -12,7 +12,20 @@ export interface ActiveSessionHydrationRequestFromSession {
   session: ActiveSession | null
 }
 
-export type ActiveSessionHydrationRequest = ActiveSessionRawHydrationRequest | ActiveSessionHydrationRequestFromSession
+/**
+ * A Library game has a different persistence envelope from an active session.
+ * Keep its PGN-only replay explicit so a legitimate saved game never has to
+ * masquerade as browser-recovery state just to use the same one-shot worker.
+ */
+export interface StoredGameHydrationRequest {
+  type: 'hydrate-stored-game'
+  id: number
+  pgn: string
+}
+
+export type ActiveSessionHydrationRequest = ActiveSessionRawHydrationRequest
+  | ActiveSessionHydrationRequestFromSession
+  | StoredGameHydrationRequest
 
 /**
  * `gameState` is an intentionally prototype-free structured-clone snapshot
@@ -28,10 +41,27 @@ export interface HydratedActiveSessionWire {
   verboseHistory: unknown
 }
 
+/** Prototype-free chess snapshot for an explicitly opened Library record. */
+export interface HydratedStoredGameWire {
+  snapshotVersion: 1
+  startFen: string
+  finalFen: string
+  historyLength: number
+  gameState: unknown
+  verboseHistory: unknown
+  canonicalReviewKey: string
+}
+
 export interface ActiveSessionHydrationResult {
   type: 'active-session-result'
   id: number
   hydrated: HydratedActiveSessionWire | null
+}
+
+export interface StoredGameHydrationResult {
+  type: 'stored-game-result'
+  id: number
+  hydrated: HydratedStoredGameWire
 }
 
 export interface ActiveSessionHydrationError {
@@ -40,4 +70,6 @@ export interface ActiveSessionHydrationError {
   message: string
 }
 
-export type ActiveSessionHydrationResponse = ActiveSessionHydrationResult | ActiveSessionHydrationError
+export type ActiveSessionHydrationResponse = ActiveSessionHydrationResult
+  | StoredGameHydrationResult
+  | ActiveSessionHydrationError

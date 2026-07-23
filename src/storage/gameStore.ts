@@ -17,6 +17,8 @@ export const LIBRARY_STORAGE_KEY = 'knightclub.game-library.v1'
 const SESSION_KEY = 'knightclub.active-session.v1'
 const PREFERENCES_KEY = 'knightclub.preferences.v1'
 const MAX_GAMES = 500
+/** Browser Library records use a character envelope for legacy compatibility. */
+export const MAX_STORED_GAME_PGN_CHARS = 524_288
 /** Keep a malformed browser mirror from asking the UI to replay an unbounded PGN. */
 export const MAX_ACTIVE_SESSION_PGN_BYTES = 524_288
 /**
@@ -149,7 +151,7 @@ function hasStoredGameSummaryFields(
 function isStoredGame(value: unknown): value is StoredGame {
   if (!hasStoredGameSummaryFields(value)) return false
   const game = value as Partial<StoredGame>
-  return typeof game.pgn === 'string' && game.pgn.length <= 524_288
+  return typeof game.pgn === 'string' && game.pgn.length <= MAX_STORED_GAME_PGN_CHARS
 }
 
 /** Public boundary for native summary IPC and the browser hydration Worker. */

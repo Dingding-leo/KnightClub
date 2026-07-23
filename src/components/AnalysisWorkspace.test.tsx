@@ -31,6 +31,7 @@ import {
   visibleCoachGuidance,
 } from '../review/reviewWorkspaceUtils'
 import { selectedReviewMoveAtPly } from '../review/reviewSelection'
+import { reviewProgressAnnouncement } from '../review/reviewProgressAnnouncement'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -77,6 +78,13 @@ function retryItem(retryKey: string): RetryItem {
 }
 
 describe('analysis workspace convenience contracts', () => {
+  it('limits full-review screen-reader progress to useful five-percent milestones', () => {
+    expect(reviewProgressAnnouncement({ completedPly: 0, totalPly: 1_024, stage: 'before' })).toBe('Full-game review started.')
+    expect(reviewProgressAnnouncement({ completedPly: 51, totalPly: 1_024, stage: 'after' })).toBe('Full-game review started.')
+    expect(reviewProgressAnnouncement({ completedPly: 52, totalPly: 1_024, stage: 'before' })).toBe('Full-game review 5% complete.')
+    expect(reviewProgressAnnouncement({ completedPly: 1_024, totalPly: 1_024, stage: 'after' })).toBe('Full-game review complete.')
+  })
+
   it('parses the initial Review game once while preserving an exact Play preview target', () => {
     const currentPgn = '1. e4 e5 2. Nf3 Nc6'
     const expected = createPgnTimeline(currentPgn)

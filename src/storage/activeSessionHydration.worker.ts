@@ -1,6 +1,10 @@
 /// <reference lib="webworker" />
 
-import { hydrateActiveSession, hydrateActiveSessionRaw } from './activeSessionHydration'
+import {
+  hydrateActiveSession,
+  hydrateActiveSessionRaw,
+  hydrateStoredGame,
+} from './activeSessionHydration'
 import type {
   ActiveSessionHydrationRequest,
   ActiveSessionHydrationResponse,
@@ -11,14 +15,19 @@ const workerScope = self as DedicatedWorkerGlobalScope
 workerScope.onmessage = (event: MessageEvent<ActiveSessionHydrationRequest>) => {
   const request = event.data
   try {
-    const hydrated = request.type === 'hydrate-active-session-raw'
-      ? hydrateActiveSessionRaw(request.raw)
-      : hydrateActiveSession(request.session)
-    const response: ActiveSessionHydrationResponse = {
-      type: 'active-session-result',
-      id: request.id,
-      hydrated,
-    }
+    const response: ActiveSessionHydrationResponse = request.type === 'hydrate-stored-game'
+      ? {
+          type: 'stored-game-result',
+          id: request.id,
+          hydrated: hydrateStoredGame(request.pgn),
+        }
+      : {
+          type: 'active-session-result',
+          id: request.id,
+          hydrated: request.type === 'hydrate-active-session-raw'
+            ? hydrateActiveSessionRaw(request.raw)
+            : hydrateActiveSession(request.session),
+        }
     workerScope.postMessage(response)
   } catch (error) {
     const response: ActiveSessionHydrationResponse = {

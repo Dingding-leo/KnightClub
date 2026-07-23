@@ -155,6 +155,9 @@ describe('bot player-side setup', () => {
     expect(markup).toContain('aria-label="Chess board"')
     expect(markup).toContain('Restoring your saved game')
     expect(markup).toContain('aria-busy="true"')
+    // The recovery status remains outside the busy board/panel, while every
+    // stale board control is removed from pointer and keyboard interaction.
+    expect(markup).toContain('inert=""')
     expect(loadPgn).not.toHaveBeenCalled()
   })
 

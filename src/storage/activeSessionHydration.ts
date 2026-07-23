@@ -1,19 +1,42 @@
 import { Chess, type Move } from 'chess.js'
+import { STANDARD_START_FEN } from '../domain/chess'
+import { createReviewKeyFromMoves } from '../review/reviewKey'
 import { isClockState } from '../domain/clock'
 import {
   normalizeActiveSession,
   normalizeHydratedActiveSession,
   parseActiveSessionRaw,
+  MAX_STORED_GAME_PGN_CHARS,
   type ActiveSession,
 } from './gameStore'
-import type { HydratedActiveSessionWire } from './activeSessionHydrationProtocol'
+import type {
+  HydratedActiveSessionWire,
+  HydratedStoredGameWire,
+} from './activeSessionHydrationProtocol'
 
 const MAX_ACTIVE_SESSION_HISTORY_LENGTH = 100_000
+// Desktop records are byte-bounded by their database envelope; browser
+// records historically used a character boundary. Keep worker replay bounded
+// even for an old browser mirror with multi-byte PGN comments.
+// Browser Library validation is character-bounded for legacy compatibility.
+// UTF-8 can use four bytes per accepted character (for example comments in
+// Chinese or emoji), so retain that complete accepted envelope in the Worker.
+const MAX_STORED_GAME_PGN_BYTES = MAX_STORED_GAME_PGN_CHARS * 4
+const MAX_STORED_GAME_HISTORY_LENGTH = 100_000
+const REVIEW_KEY_PATTERN = /^[0-9a-f]{16}$/
 
 export interface HydratedActiveSession {
   session: ActiveSession
   game: Chess
   verboseHistory: readonly Move[]
+}
+
+/** A verified chess snapshot for an explicitly opened Library record. */
+export interface HydratedStoredGame {
+  game: Chess
+  startFen: string
+  verboseHistory: readonly Move[]
+  canonicalReviewKey: string
 }
 
 function hydrateSession(session: ActiveSession | null): HydratedActiveSessionWire | null {
@@ -52,6 +75,32 @@ export function hydrateActiveSessionRaw(raw: string | null): HydratedActiveSessi
 /** Worker/fallback parser for the authoritative desktop SQLite payload. */
 export function hydrateActiveSession(session: ActiveSession | null): HydratedActiveSessionWire | null {
   return hydrateSession(session)
+}
+
+/**
+ * Worker/fallback parser for a selected Library PGN. It deliberately accepts
+ * only the PGN rather than a synthetic ActiveSession: saved-library records
+ * have their own persistence boundary and can carry different metadata.
+ */
+export function hydrateStoredGame(pgn: string): HydratedStoredGameWire {
+  if (typeof pgn !== 'string'
+    || new TextEncoder().encode(pgn).byteLength > MAX_STORED_GAME_PGN_BYTES) {
+    throw new Error('Saved PGN is invalid or too large.')
+  }
+
+  const game = new Chess()
+  if (pgn.trim()) game.loadPgn(pgn)
+  const verboseHistory = game.history({ verbose: true })
+  const startFen = game.getHeaders().FEN ?? STANDARD_START_FEN
+  return {
+    snapshotVersion: 1,
+    startFen,
+    finalFen: game.fen(),
+    historyLength: verboseHistory.length,
+    gameState: game,
+    verboseHistory,
+    canonicalReviewKey: createReviewKeyFromMoves(startFen, verboseHistory),
+  }
 }
 
 function isSquare(value: unknown): boolean {
@@ -118,4 +167,59 @@ export function reviveHydratedActiveSession(value: unknown): HydratedActiveSessi
   }
 
   return { session, game, verboseHistory: hydrated.verboseHistory }
+}
+
+/**
+ * Reattaches a structured-cloned selected-game snapshot only after proving
+ * its FEN, undo depth and precomputed move history still agree. The canonical
+ * review key is made in the worker so opening a long legacy game never spends
+ * an extra linear BigInt hash pass on the interaction thread.
+ */
+export function reviveHydratedStoredGame(value: unknown): HydratedStoredGame {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Saved-game Worker returned an invalid response.')
+  }
+  const hydrated = value as Partial<HydratedStoredGameWire>
+  if (hydrated.snapshotVersion !== 1
+    || typeof hydrated.startFen !== 'string'
+    || hydrated.startFen.length === 0
+    || hydrated.startFen.length > 1_024
+    || typeof hydrated.finalFen !== 'string'
+    || !Number.isInteger(hydrated.historyLength)
+    || Number(hydrated.historyLength) < 0
+    || Number(hydrated.historyLength) > MAX_STORED_GAME_HISTORY_LENGTH
+    || !isVerboseHistory(hydrated.verboseHistory, Number(hydrated.historyLength))
+    || typeof hydrated.canonicalReviewKey !== 'string'
+    || !REVIEW_KEY_PATTERN.test(hydrated.canonicalReviewKey)) {
+    throw new Error('Saved-game Worker returned an invalid response.')
+  }
+
+  try {
+    // The original PGN may start from an authored FEN. Validate that small
+    // header independently without replaying a potentially long main line.
+    new Chess(hydrated.startFen)
+  } catch {
+    throw new Error('Saved-game Worker returned an invalid response.')
+  }
+
+  const game = reviveGameState(hydrated.gameState)
+  const privateHistory = (game as unknown as { _history?: unknown })._history
+  try {
+    if (!Array.isArray(privateHistory)
+      || privateHistory.length !== hydrated.historyLength
+      || game.fen() !== hydrated.finalFen) {
+      throw new Error('Saved-game Worker snapshot did not verify.')
+    }
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error('Saved-game Worker snapshot did not verify.')
+  }
+
+  return {
+    game,
+    startFen: hydrated.startFen,
+    verboseHistory: hydrated.verboseHistory,
+    canonicalReviewKey: hydrated.canonicalReviewKey,
+  }
 }

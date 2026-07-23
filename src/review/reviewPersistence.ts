@@ -1,8 +1,14 @@
-import { createPgnTimeline, type AnalysisMove, type AnalysisTimeline } from '../analysis/analysisModel'
+import { createPgnTimeline, type AnalysisTimeline } from '../analysis/analysisModel'
 import type { GameReview } from './gameReviewRunner'
 import type { ReviewedMove } from './reviewModel'
+import {
+  createReviewKeyFromMoves,
+  REVIEW_KEY_SCHEMA_VERSION,
+} from './reviewKey'
 
-export const REVIEW_SCHEMA_VERSION = 1
+export { createReviewKeyFromMoves, type ReviewKeyMove } from './reviewKey'
+
+export const REVIEW_SCHEMA_VERSION = REVIEW_KEY_SCHEMA_VERSION
 export const MAX_PERSISTED_REVIEWS = 500
 export const MAX_REVIEW_PLIES = 1_024
 export const MAX_REVIEW_BYTES = 2_097_152
@@ -76,13 +82,6 @@ interface CachedBrowserReviews {
  * invalidates it before a record can be used again.
  */
 const browserReviewCache = new WeakMap<ReviewStorage, CachedBrowserReviews>()
-
-/**
- * The canonical review identity intentionally needs only the move facts that
- * define a chess main line. Callers that already own a verbose `chess.js`
- * history can therefore create the same key without reparsing its PGN.
- */
-export type ReviewKeyMove = Pick<AnalysisMove, 'color' | 'from' | 'to' | 'promotion'>
 
 function byteLength(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength
@@ -226,25 +225,6 @@ function matchesSourceTimeline(reviewedMoves: ReviewedMove[], timeline: Analysis
         && reviewed.from === source.from
         && reviewed.to === source.to
     })
-}
-
-function stableHash(input: string): string {
-  // FNV-1a 64 is tiny, deterministic and stable across browser/native builds.
-  let hash = 0xcbf29ce484222325n
-  const prime = 0x100000001b3n
-  const mask = 0xffffffffffffffffn
-  for (const byte of new TextEncoder().encode(input)) {
-    hash ^= BigInt(byte)
-    hash = (hash * prime) & mask
-  }
-  return hash.toString(16).padStart(16, '0')
-}
-
-export function createReviewKeyFromMoves(startFen: string, moves: readonly ReviewKeyMove[]): string {
-  const line = moves
-    .map((move) => `${move.color}:${move.from}${move.to}${move.promotion ?? ''}`)
-    .join('|')
-  return stableHash(`knightclub-review-v${REVIEW_SCHEMA_VERSION}\n${startFen}\n${line}`)
 }
 
 /** Preserves the timeline-facing API while sharing the direct-history identity path. */

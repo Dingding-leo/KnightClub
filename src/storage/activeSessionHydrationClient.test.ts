@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import type { ActiveSession } from './gameStore'
+import { MAX_STORED_GAME_PGN_CHARS, type ActiveSession } from './gameStore'
 import {
   hydrateActiveSession,
+  hydrateStoredGame,
   reviveHydratedActiveSession,
+  reviveHydratedStoredGame,
 } from './activeSessionHydration'
 import {
   ActiveSessionHydrationClient,
+  shouldHydrateStoredGameInBackground,
   type ActiveSessionHydrationWorkerLike,
 } from './activeSessionHydrationClient'
 import type {
   ActiveSessionHydrationRequest,
   ActiveSessionHydrationResponse,
   HydratedActiveSessionWire,
+  HydratedStoredGameWire,
 } from './activeSessionHydrationProtocol'
 
 const session: ActiveSession = {
@@ -26,6 +30,18 @@ function wire(value: ActiveSession = session): HydratedActiveSessionWire {
   const hydrated = hydrateActiveSession(value)
   if (!hydrated) throw new Error('Expected a valid active-session snapshot.')
   return hydrated
+}
+
+const storedGamePgn = [
+  '[Event "Library opening"]',
+  '[SetUp "1"]',
+  '[FEN "8/8/8/8/8/8/4K3/7k w - - 0 1"]',
+  '',
+  '1. Kf2 Kh2 {A saved note} *',
+].join('\n')
+
+function storedWire(pgn = storedGamePgn): HydratedStoredGameWire {
+  return hydrateStoredGame(pgn)
 }
 
 class FakeActiveSessionWorker implements ActiveSessionHydrationWorkerLike {
@@ -157,6 +173,80 @@ describe('ActiveSessionHydrationClient', () => {
     expect(worker.terminated).toBe(true)
     client.dispose()
   })
+
+  it('opens a selected Library PGN in the worker with headers, comments and undo history intact', async () => {
+    const worker = new FakeActiveSessionWorker()
+    const client = new ActiveSessionHydrationClient(() => worker, true)
+    const pending = client.hydrateStoredGame(storedGamePgn)
+    const request = worker.messages[0]
+    if (!request || request.type !== 'hydrate-stored-game') {
+      throw new Error('Expected a selected saved-game request.')
+    }
+
+    worker.reply({
+      type: 'stored-game-result',
+      id: request.id,
+      hydrated: structuredClone(storedWire()),
+    })
+
+    const restored = await pending
+    expect(restored.startFen).toBe('8/8/8/8/8/8/4K3/7k w - - 0 1')
+    expect(restored.verboseHistory.map((move) => move.san)).toEqual(['Kf2', 'Kh2'])
+    expect(restored.game.getHeaders()).toMatchObject({ Event: 'Library opening' })
+    expect(restored.game.getComments()).toEqual([expect.objectContaining({ comment: 'A saved note' })])
+    expect(restored.game.undo()?.san).toBe('Kh2')
+    expect(restored.canonicalReviewKey).toMatch(/^[0-9a-f]{16}$/)
+    expect(worker.terminated).toBe(true)
+    client.dispose()
+  })
+
+  it('cancels a selected Library game before a late worker result can resolve', async () => {
+    const worker = new FakeActiveSessionWorker()
+    const client = new ActiveSessionHydrationClient(() => worker, true)
+    const pending = client.hydrateStoredGame(storedGamePgn)
+    const outcome = pending.catch((error: unknown) => error)
+    const request = worker.messages[0]
+    if (!request || request.type !== 'hydrate-stored-game') {
+      throw new Error('Expected a selected saved-game request.')
+    }
+
+    client.cancel('Player cancelled opening.')
+    worker.reply({ type: 'stored-game-result', id: request.id, hydrated: structuredClone(storedWire()) })
+
+    await expect(outcome).resolves.toMatchObject({ name: 'AbortError', message: 'Player cancelled opening.' })
+    expect(worker.terminated).toBe(true)
+    client.dispose()
+  })
+
+  it('uses the same yielded fallback for a selected Library game and keeps its size decision allocation-free', async () => {
+    const client = new ActiveSessionHydrationClient(() => {
+      throw new Error('Workers unavailable')
+    }, false)
+    let settled = false
+    const pending = client.hydrateStoredGame(storedGamePgn).then((value) => {
+      settled = true
+      return value
+    })
+
+    expect(settled).toBe(false)
+    await expect(pending).resolves.toMatchObject({ startFen: '8/8/8/8/8/8/4K3/7k w - - 0 1' })
+    expect(shouldHydrateStoredGameInBackground('x'.repeat(2 * 1024))).toBe(false)
+    expect(shouldHydrateStoredGameInBackground('x'.repeat(2 * 1024 + 1))).toBe(true)
+    client.dispose()
+  })
+
+  it('fails a long selected Library game safely when no cancellable Worker is available', async () => {
+    const client = new ActiveSessionHydrationClient(() => {
+      throw new Error('Workers unavailable')
+    }, false)
+
+    const outcome = client.hydrateStoredGame('x'.repeat(2 * 1024 + 1)).catch((error: unknown) => error)
+
+    await expect(outcome).resolves.toMatchObject({
+      message: 'This saved game needs a local background Worker to open safely.',
+    })
+    client.dispose()
+  })
 })
 
 describe('active-session hydration snapshot boundary', () => {
@@ -181,6 +271,24 @@ describe('active-session hydration snapshot boundary', () => {
     expect(restored?.game.getComments()).toEqual([
       expect.objectContaining({ comment: 'A saved note' }),
     ])
+  })
+
+  it('accepts a valid legacy Library comment whose UTF-8 bytes exceed one MiB', () => {
+    // Browser Library records historically have a character limit. A Chinese
+    // annotation can therefore be valid storage while requiring more than
+    // the old one-MiB byte guard used by the selected-game Worker.
+    const pgn = `1. e4 {${'你'.repeat(350_000)}} e5 *`
+
+    expect(pgn.length).toBeLessThanOrEqual(MAX_STORED_GAME_PGN_CHARS)
+    expect(new TextEncoder().encode(pgn).byteLength).toBeGreaterThan(1_048_576)
+    expect(reviveHydratedStoredGame(hydrateStoredGame(pgn)).verboseHistory.map((move) => move.san)).toEqual(['e4', 'e5'])
+  })
+
+  it('rejects an invalid selected-game review identity without replaying it on the UI thread', () => {
+    expect(() => reviveHydratedStoredGame({
+      ...structuredClone(storedWire()),
+      canonicalReviewKey: 'not-a-review-key',
+    })).toThrow('invalid response')
   })
 })
 

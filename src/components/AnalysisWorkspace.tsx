@@ -69,6 +69,7 @@ import {
 import { copyText, downloadText } from '../domain/textTransfer'
 import { legalMovesFrom, STANDARD_START_FEN } from '../domain/chess'
 import { runGameReview, type GameReview, type ReviewProgress } from '../review/gameReviewRunner'
+import { reviewProgressAnnouncement } from '../review/reviewProgressAnnouncement'
 import { saveCompletedReviewInBackground } from '../review/backgroundReviewSave'
 import type { MoveClassification, ReviewedMove } from '../review/reviewModel'
 import { buildCoachGuidanceFromTimeline, type CoachGuidance } from '../review/coach'
@@ -610,7 +611,10 @@ export function AnalysisWorkspace({
 }: AnalysisWorkspaceProps) {
   // A normal game keeps the immediate Review-board handoff. Longer games
   // paint a usable shell first and replay privately in a Worker below.
-  const initialPgnNeedsWorker = shouldParseInitialPgnInWorker(currentPgn)
+  // This is an initial-routing decision, not live analysis state. Keeping it
+  // in lazy state avoids UTF-8 encoding a long immutable PGN again for every
+  // full-game Review progress update.
+  const [initialPgnNeedsWorker] = useState(() => shouldParseInitialPgnInWorker(currentPgn))
   const [initialWorkspace] = useState(() => initialPgnNeedsWorker
     ? { timeline: createFenTimeline(STANDARD_START_FEN), ply: 0 }
     : createInitialWorkspaceState(
@@ -1811,10 +1815,17 @@ export function AnalysisWorkspace({
             <ReviewSaveNotice saving={reviewSaving} />
             <RetrySaveNotice action={retrySavingAction} />
             {reviewRunning && reviewProgress && (
-              <div className="review-progress" role="status" aria-live="polite">
+              <div className="review-progress">
                 <div><span>Analysing move {Math.min(reviewProgress.completedPly + 1, reviewProgress.totalPly)} of {reviewProgress.totalPly}</span><strong>{Math.round(100 * reviewProgress.completedPly / reviewProgress.totalPly)}%</strong></div>
-                <progress max={reviewProgress.totalPly} value={reviewProgress.completedPly} />
+                <progress
+                  max={reviewProgress.totalPly}
+                  value={reviewProgress.completedPly}
+                  aria-label={`Full-game review ${Math.round(100 * reviewProgress.completedPly / reviewProgress.totalPly)}% complete`}
+                />
                 <small>{reviewProgress.stage === 'before' ? 'Finding the best alternatives…' : 'Measuring the played move…'}</small>
+                <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                  {reviewProgressAnnouncement(reviewProgress)}
+                </p>
               </div>
             )}
             {reviewError && <p className="analysis-error" role="alert">{reviewError}</p>}

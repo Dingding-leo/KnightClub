@@ -160,8 +160,14 @@ import { ActiveSessionPersistence } from './storage/activeSessionPersistence'
 import {
   ActiveSessionHydrationClient,
   shouldHydrateActiveSessionInBackground,
+  shouldHydrateStoredGameInBackground,
 } from './storage/activeSessionHydrationClient'
-import type { HydratedActiveSession } from './storage/activeSessionHydration'
+import {
+  hydrateStoredGame,
+  reviveHydratedStoredGame,
+  type HydratedActiveSession,
+  type HydratedStoredGame,
+} from './storage/activeSessionHydration'
 import { LibraryHydrationClient } from './storage/libraryHydrationClient'
 import {
   createReviewKeyFromMoves,
@@ -196,6 +202,11 @@ type DatabaseStatus = { kind: 'browser' | 'migrating' | 'ready' | 'recovered' | 
 type LibraryLoadState = 'idle' | 'loading' | 'ready' | 'error'
 type ActiveSessionRestoreState = 'ready' | 'restoring' | 'blocked'
 type ReviewSource = Pick<StoredGame, 'id' | 'pgn'>
+type StoredGameOpening = {
+  gameId: string
+  requestVersion: number
+  resumePreviousClock: boolean
+}
 
 const navItems: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
   { id: 'play', label: 'Play', icon: Gamepad2 },
@@ -646,6 +657,10 @@ export default function App() {
   // its cancellable Worker after its Review shell has painted.
   const [reviewSource, setReviewSource] = useState<ReviewSource | null>(null)
   const [openingLibraryGameId, setOpeningLibraryGameId] = useState<string | null>(null)
+  // A confirmed long Library game keeps its full PGN in a ref while Play
+  // paints a cancellable opening shell. State retains only small request
+  // metadata, so Library itself remains summary-only.
+  const [storedGameOpening, setStoredGameOpening] = useState<StoredGameOpening | null>(null)
   const [libraryActionError, setLibraryActionError] = useState<string | null>(null)
   const [databaseReady, setDatabaseReady] = useState(!desktop)
   const [databaseStatus, setDatabaseStatus] = useState<DatabaseStatus>(desktop
@@ -681,8 +696,18 @@ export default function App() {
   const tacticsWriteQueue = useRef<Promise<void>>(Promise.resolve())
   const activeSessionPersistence = useRef<ActiveSessionPersistence | null>(null)
   const activeSessionPersistRef = useRef<(session: ActiveSession) => void>(() => {})
+  // A confirmed long Library open pauses the visible board. Retain the last
+  // exact active snapshot separately until the replacement succeeds so a
+  // pagehide cannot turn that intentional pause into lost progress.
+  const activeSessionSnapshotRef = useRef<ActiveSession | null>(null)
+  const suspendedActiveSession = useRef<ActiveSession | null>(null)
   const activeSessionHydrationClient = useRef<ActiveSessionHydrationClient | null>(null)
+  const storedGameHydrationClient = useRef<ActiveSessionHydrationClient | null>(null)
   const activeSessionRestoreVersion = useRef(0)
+  const storedGameOpenVersion = useRef(0)
+  const storedGameOpeningRef = useRef<StoredGameOpening | null>(null)
+  const storedGameOpeningItem = useRef<StoredGame | null>(null)
+  const storedGameOpeningCancelButton = useRef<HTMLButtonElement | null>(null)
   // Desktop startup can still be reading SQLite when a player explicitly
   // rejects recovery. Keep that choice separate from generic Worker request
   // cancellation so the bootstrap can finish migrating non-game data without
@@ -986,6 +1011,13 @@ export default function App() {
     activeSessionHydrationClient.current ??= new ActiveSessionHydrationClient()
     return activeSessionHydrationClient.current
   }, [])
+  const getStoredGameHydrationClient = useCallback(() => {
+    // Opening a Library record must never cancel startup recovery (or vice
+    // versa), even though both paths use the same verified chess snapshot
+    // protocol.
+    storedGameHydrationClient.current ??= new ActiveSessionHydrationClient()
+    return storedGameHydrationClient.current
+  }, [])
   const hydrateStableBrowserActiveSession = useCallback(async (
     initialRaw: string | null,
     cancelled: () => boolean = () => false,
@@ -1121,7 +1153,10 @@ export default function App() {
   const gameFinished = game.isGameOver() || termination !== null
   const activeSessionRestoring = activeSessionRestoreState !== 'ready'
   const activeSessionRestoreBlocked = activeSessionRestoreState === 'blocked'
+  const storedGameOpeningInProgress = storedGameOpening !== null
+  const playTemporarilyBlocked = activeSessionRestoring || storedGameOpeningInProgress
   const premoveWindow = mode === 'bot'
+    && !playTemporarilyBlocked
     && isBotTurn(mode, game.turn(), humanColor)
     && !gameFinished
     && !decision
@@ -1139,7 +1174,7 @@ export default function App() {
   }, [game, humanColor, mode, premoveWindow, selected])
   const previewTargets = useMemo(() => new Set<Square>(), [])
   const boardDisabled = previewing
-    || activeSessionRestoring
+    || playTemporarilyBlocked
     || gameFinished
     || !clock.activeColor
     || Boolean(decision)
@@ -1182,6 +1217,13 @@ export default function App() {
     ? pgnFromHistory(game, startFen, verbose, currentResult, { Termination: currentStatus })
     : pgnFromHistory(game, startFen, verbose),
   [game, gameFinished, startFen, verbose, currentResult, currentStatus])
+  // Keep the current state ready for the deliberate long-open suspension
+  // path. The ref is updated from the committed render before a player can
+  // confirm the replacement dialog, so it contains the already-paused clock.
+  const activeSessionSnapshot = useMemo<ActiveSession>(() => ({
+    pgn: sharePgn, startFen, mode, botLevel, botProfileId, orientation, humanColor, colorChoice, timeControl, clock, clockHistory, termination,
+  }), [sharePgn, startFen, mode, botLevel, botProfileId, orientation, humanColor, colorChoice, timeControl, clock, clockHistory, termination])
+  activeSessionSnapshotRef.current = activeSessionSnapshot
   // The saved source remains immutable while Review is open. A key below
   // remounts the workspace when a player explicitly selects another Library
   // game, so its initial long-PGN Worker path never races the live board.
@@ -1505,8 +1547,41 @@ export default function App() {
     if (database && databaseReady) void database.clearActiveSession().catch(reportDatabaseError)
   }
 
+  const clearPremove = useCallback(() => {
+    premoveRef.current = null
+    setPremove(null)
+  }, [])
+
+  const persistSuspendedActiveSession = useCallback(() => {
+    const suspended = suspendedActiveSession.current
+    if (!suspended) return
+    // Write the paused fallback before reopening input. The normal idle writer
+    // will soon replace it with the resumed current session, but this makes a
+    // pagehide between those renders recoverable.
+    activeSessionPersistRef.current(suspended)
+    suspendedActiveSession.current = null
+  }, [])
+
+  const cancelStoredGameOpening = useCallback((message: string, announce = false, resumePreviousClock = true) => {
+    const opening = storedGameOpeningRef.current
+    if (!opening) return
+    storedGameOpenVersion.current += 1
+    storedGameOpeningRef.current = null
+    storedGameOpeningItem.current = null
+    storedGameHydrationClient.current?.cancel(message)
+    persistSuspendedActiveSession()
+    if (resumePreviousClock && opening.resumePreviousClock) {
+      const now = Date.now()
+      setClock((current) => resumeClock(current, now))
+      captureClockNow(now)
+    }
+    setStoredGameOpening(null)
+    if (announce) setNotice('Opening cancelled — your previous game is still available.')
+  }, [captureClockNow, persistSuspendedActiveSession])
+
   const clearPersistedLibrary = () => {
     // A response that began before Clear must never restore deleted rows.
+    cancelStoredGameOpening('Saved games were cleared.')
     libraryRequestVersion.current += 1
     libraryHistoryRequestVersion.current += 1
     libraryHistoryHydration.current = null
@@ -1523,10 +1598,96 @@ export default function App() {
     if (database && databaseReady) void database.clearGames().catch(reportDatabaseError)
   }
 
-  const clearPremove = () => {
-    premoveRef.current = null
-    setPremove(null)
-  }
+  const applyStoredGame = useCallback((item: StoredGame, hydrated: HydratedStoredGame) => {
+    const next = hydrated.game
+    const restoredTermination = isGameTermination(item.termination) ? item.termination : null
+    const control = isTimeControl(item.timeControl) ? item.timeControl : getTimeControl('unlimited')
+    const restoredHumanColor: Color = item.humanColor === 'b' ? 'b' : 'w'
+    const restoredColorChoice = isHumanColorChoice(item.colorChoice)
+      ? item.colorChoice
+      : restoredHumanColor === 'b' ? 'black' : 'white'
+    const restoredProfile = isBotProfileId(item.botProfileId)
+      ? botProfileForId(item.botProfileId)
+      : profileForLegacyLevel(item.botLevel)
+    const storedWithReviewKey = item.reviewKey === hydrated.canonicalReviewKey
+      ? item
+      : { ...item, reviewKey: hydrated.canonicalReviewKey }
+
+    // A legacy row obtains its canonical link only after the player has
+    // explicitly chosen the destructive board-open action. The worker has
+    // already built this key while replaying, so adoption stays paint-first.
+    if (storedWithReviewKey !== item) {
+      setLibrary((current) => current.map((stored) => stored.id === item.id
+        ? { ...stored, reviewKey: hydrated.canonicalReviewKey }
+        : stored))
+      persistLibraryGameUpdate(storedWithReviewKey)
+    }
+
+    const now = Date.now()
+    const restoredClock = createReadyClock(control, next.turn(), now)
+    botRequestVersion.current += 1
+    botClient.current?.cancel()
+    clearPremove()
+    setGame(next, hydrated.verboseHistory); setStartFen(hydrated.startFen); setPreviewPly(null)
+    setSelected(null); setPromotion(null)
+    customTimeDraft.current = customTimeDraftFor(control)
+    setCustomTimeOpen(control.category === 'custom')
+    setTimeControl(control); setClock(next.isGameOver() || restoredTermination ? pauseClock(restoredClock, now) : restoredClock)
+    setClockHistory([]); setTermination(restoredTermination); setDecision(null)
+    setupAutoCollapsed.current = hydrated.verboseHistory.length > 0
+    setSetupOpen(!setupAutoCollapsed.current)
+    setMode(item.mode); setHumanColor(restoredHumanColor); setColorChoice(restoredColorChoice)
+    if (item.mode === 'bot') setOrientation(restoredHumanColor === 'w' ? 'white' : 'black')
+    if (item.mode === 'bot') {
+      setBotProfileId(restoredProfile.id)
+      setBotLevel(restoredProfile.engineLevel)
+    }
+    setThinking(false)
+    savedPosition.current = terminalSessionFingerprint(
+      next.fen(),
+      restoredTermination?.result ?? gameResult(next),
+      next.isGameOver() || Boolean(restoredTermination),
+    )
+    setReviewSource(null)
+    navigateTo('play')
+    setNotice('Saved game loaded for viewing.')
+  }, [clearPremove, navigateTo, persistLibraryGameUpdate, setGame])
+
+  const beginStoredGameOpening = useCallback((item: StoredGame, resumePreviousClock: boolean) => {
+    // The library can still be reached through navigation while an earlier
+    // record is opening. Supersede it without briefly restarting the paused
+    // board underneath the new request.
+    cancelStoredGameOpening('Superseded by a newer saved game opening request.', false, false)
+    const opening: StoredGameOpening = {
+      gameId: item.id,
+      requestVersion: ++storedGameOpenVersion.current,
+      resumePreviousClock,
+    }
+    storedGameOpeningItem.current = item
+    storedGameOpeningRef.current = opening
+    // A completed confirmation normally paused this clock already. Keep the
+    // opener safe for the zero-ply fast route too, where no confirmation is
+    // needed and a running clock must never keep charging behind the shell.
+    const now = Date.now()
+    // An idle writer for the old board could otherwise win while the worker
+    // is still replaying. Retain a paused fallback for pagehide/cancel, then
+    // drop only the scheduled write that would otherwise race the successor.
+    const fallback = activeSessionSnapshotRef.current
+    suspendedActiveSession.current = fallback
+      ? { ...fallback, clock: fallback.clock ? pauseClock(fallback.clock, now) : fallback.clock }
+      : null
+    activeSessionPersistence.current?.discard()
+    setClock((current) => pauseClock(current, now))
+    captureClockNow(now)
+    botRequestVersion.current += 1
+    botClient.current?.cancel()
+    clearPremove()
+    setSelected(null)
+    setPromotion(null)
+    setThinking(false)
+    setStoredGameOpening(opening)
+    navigateTo('play')
+  }, [cancelStoredGameOpening, captureClockNow, clearPremove, navigateTo])
 
   const playSound = useCallback((event: GameSoundEvent) => {
     if (!soundsEnabledRef.current) return
@@ -1539,6 +1700,7 @@ export default function App() {
   }, [playSound])
 
   const verifyEngine = useCallback(async (enginePath: string | null) => {
+    if (playTemporarilyBlocked) return
     if (premoveWindow) {
       setNotice('Stockfish is making the live bot move. Verify it after the move finishes.')
       return
@@ -1566,7 +1728,7 @@ export default function App() {
       engineProbeActiveRef.current = false
       setEngineProbeActive(false)
     }
-  }, [desktop, premoveWindow])
+  }, [desktop, playTemporarilyBlocked, premoveWindow])
 
   const chooseEngineExecutable = async () => {
     if (!desktop) return
@@ -1597,7 +1759,7 @@ export default function App() {
     confirmLabel: string,
     action: () => void,
   ) => {
-    if (decision) return
+    if (playTemporarilyBlocked || decision) return
     if (gameFinished || history.length === 0) {
       action()
       return
@@ -1616,7 +1778,7 @@ export default function App() {
   }
 
   const finishGame = (nextTermination: GameTermination) => {
-    if (termination || game.isGameOver()) return
+    if (playTemporarilyBlocked || termination || game.isGameOver()) return
     const now = Date.now()
     if (mode === 'bot') {
       botRequestVersion.current += 1
@@ -1637,7 +1799,7 @@ export default function App() {
   }
 
   const openDecision = (kind: 'resign' | 'draw-response') => {
-    if (gameFinished || decision) return
+    if (playTemporarilyBlocked || gameFinished || decision) return
     const now = Date.now()
     if (mode === 'bot') {
       botRequestVersion.current += 1
@@ -1678,7 +1840,7 @@ export default function App() {
   }
 
   const offerDraw = () => {
-    if (gameFinished || decision) return
+    if (playTemporarilyBlocked || gameFinished || decision) return
     if (mode === 'bot') {
       if (thinking || !isHumanTurn(mode, game.turn(), humanColor)) return
       if (botAcceptsDraw(game, botColor, botLevel)) finishGame(agreedDraw(humanColor))
@@ -1777,7 +1939,7 @@ export default function App() {
   }
 
   const commit = (move: MoveInput) => {
-    if (gameFinished || !clock.activeColor || !isHumanTurn(mode, game.turn(), humanColor)) return
+    if (playTemporarilyBlocked || gameFinished || !clock.activeColor || !isHumanTurn(mode, game.turn(), humanColor)) return
     const next = cloneGame(game, startFen, verbose)
     let applied: Move
     try { applied = next.move(move) } catch { setNotice('Illegal move.'); return }
@@ -1843,7 +2005,7 @@ export default function App() {
 
   const attemptMove = (from: Square, to: Square) => {
     if (premoveWindow) { attemptPremove(from, to); return }
-    if (gameFinished || !clock.activeColor || thinking || !isHumanTurn(mode, game.turn(), humanColor)) return
+    if (playTemporarilyBlocked || gameFinished || !clock.activeColor || thinking || !isHumanTurn(mode, game.turn(), humanColor)) return
     const piece = game.get(from)
     if (piece?.color !== game.turn()) return
     const matches = legalMovesFrom(game, from).filter((move) => move.to === to)
@@ -1855,7 +2017,7 @@ export default function App() {
 
   const chooseSquare = (square: Square) => {
     if (premoveWindow) { choosePremoveSquare(square); return }
-    if (gameFinished || !clock.activeColor || thinking || !isHumanTurn(mode, game.turn(), humanColor)) return
+    if (playTemporarilyBlocked || gameFinished || !clock.activeColor || thinking || !isHumanTurn(mode, game.turn(), humanColor)) return
     const piece = game.get(square)
     if (!selected || piece?.color === game.turn()) { setSelected(piece?.color === game.turn() ? square : null); return }
     if (selected === square) { setSelected(null); return }
@@ -1884,7 +2046,7 @@ export default function App() {
   }
 
   const undo = () => {
-    if (!canUndo) return
+    if (playTemporarilyBlocked || !canUndo) return
     botRequestVersion.current += 1
     botClient.current?.cancel()
     clearPremove(); setThinking(false)
@@ -1933,6 +2095,7 @@ export default function App() {
   }
 
   const toggleClock = () => {
+    if (playTemporarilyBlocked) return
     const now = Date.now()
     if (clock.pausedColor) {
       setClock(resumeClock(clock, now)); setNotice('Clock resumed.')
@@ -1993,65 +2156,24 @@ export default function App() {
   }
 
   const openStored = (item: StoredGame) => {
+    if (activeSessionRestoring) {
+      setLibraryActionError('Your current saved game is still restoring. Please wait before opening another game.')
+      return
+    }
     // The confirmation must be immediate. In particular, do not replay a
     // large PGN merely to ask whether the player wants to replace their board.
+    const resumePreviousClock = Boolean(clock.activeColor)
     requestRestart(
       'Open saved game?',
       `Opening this game replaces the ${history.length}-ply unfinished game.`,
       'Open saved game',
       () => {
+        if (shouldHydrateStoredGameInBackground(item.pgn)) {
+          beginStoredGameOpening(item, resumePreviousClock)
+          return
+        }
         try {
-          const next = new Chess(); next.loadPgn(item.pgn)
-          const restoredTermination = isGameTermination(item.termination) ? item.termination : null
-          const restoredStartFen = next.getHeaders().FEN ?? STANDARD_START_FEN
-          const restoredVerbose = next.history({ verbose: true })
-          // A legacy row obtains its canonical link only after the player has
-          // explicitly chosen the destructive board-open action. Saved-game
-          // Review takes a separate Worker-backed, non-destructive route.
-          const canonicalReviewKey = createReviewKeyFromMoves(restoredStartFen, restoredVerbose)
-          const storedWithReviewKey = item.reviewKey === canonicalReviewKey
-            ? item
-            : { ...item, reviewKey: canonicalReviewKey }
-          const control = isTimeControl(item.timeControl) ? item.timeControl : getTimeControl('unlimited')
-          const restoredHumanColor: Color = item.humanColor === 'b' ? 'b' : 'w'
-          const restoredColorChoice = isHumanColorChoice(item.colorChoice)
-            ? item.colorChoice
-            : restoredHumanColor === 'b' ? 'black' : 'white'
-          const restoredProfile = isBotProfileId(item.botProfileId)
-            ? botProfileForId(item.botProfileId)
-            : profileForLegacyLevel(item.botLevel)
-          if (storedWithReviewKey !== item) {
-            setLibrary((current) => current.map((stored) => stored.id === item.id
-              ? { ...stored, reviewKey: canonicalReviewKey }
-              : stored))
-            persistLibraryGameUpdate(storedWithReviewKey)
-          }
-          const now = Date.now()
-          const restoredClock = newClock(control, next.turn())
-          botRequestVersion.current += 1
-          botClient.current?.cancel()
-          clearPremove()
-          setGame(next, restoredVerbose); setStartFen(restoredStartFen); setPreviewPly(null)
-          customTimeDraft.current = customTimeDraftFor(control)
-          setCustomTimeOpen(control.category === 'custom')
-          setTimeControl(control); setClock(next.isGameOver() || restoredTermination ? pauseClock(restoredClock, now) : restoredClock)
-          setClockHistory([]); setTermination(restoredTermination); setDecision(null)
-          setupAutoCollapsed.current = next.history().length > 0
-          setSetupOpen(!setupAutoCollapsed.current)
-          setMode(item.mode); setHumanColor(restoredHumanColor); setColorChoice(restoredColorChoice)
-          if (item.mode === 'bot') setOrientation(restoredHumanColor === 'w' ? 'white' : 'black')
-          if (item.mode === 'bot') {
-            setBotProfileId(restoredProfile.id)
-            setBotLevel(restoredProfile.engineLevel)
-          }
-          setThinking(false)
-          savedPosition.current = terminalSessionFingerprint(
-            next.fen(),
-            restoredTermination?.result ?? gameResult(next),
-            next.isGameOver() || Boolean(restoredTermination),
-          )
-          setReviewSource(null)
-          navigateTo('play'); setNotice('Saved game loaded for viewing.')
+          applyStoredGame(item, reviveHydratedStoredGame(hydrateStoredGame(item.pgn)))
         } catch { setNotice('Saved PGN is invalid.') }
       },
     )
@@ -2098,8 +2220,76 @@ export default function App() {
       })
   }
 
+  useEffect(() => {
+    if (!storedGameOpening || tab !== 'play') return
+    const item = storedGameOpeningItem.current
+    if (!item || item.id !== storedGameOpening.gameId) {
+      cancelStoredGameOpening('Saved game opening no longer has a selected record.', true)
+      return
+    }
+
+    let cancelled = false
+    const isCurrent = () => !cancelled
+      && storedGameOpenVersion.current === storedGameOpening.requestVersion
+      && storedGameOpeningRef.current?.requestVersion === storedGameOpening.requestVersion
+
+    // Effects run after React has committed the Play shell. The worker can
+    // replay a long PGN privately while the old board stays visibly paused.
+    void getStoredGameHydrationClient().hydrateStoredGame(item.pgn)
+      .then((hydrated) => {
+        if (!isCurrent()) return
+        storedGameOpeningRef.current = null
+        storedGameOpeningItem.current = null
+        // The player chose this replacement and the verified snapshot is now
+        // ready to adopt, so the suspended predecessor must not be restored.
+        suspendedActiveSession.current = null
+        setStoredGameOpening(null)
+        applyStoredGame(item, hydrated)
+      })
+      .catch(() => {
+        if (!isCurrent()) return
+        storedGameOpeningRef.current = null
+        storedGameOpeningItem.current = null
+        persistSuspendedActiveSession()
+        if (storedGameOpening.resumePreviousClock) {
+          const now = Date.now()
+          setClock((current) => resumeClock(current, now))
+          captureClockNow(now)
+        }
+        setStoredGameOpening(null)
+        setNotice('Couldn’t open that saved game. Your previous game is still available.')
+      })
+
+    return () => {
+      cancelled = true
+      if (storedGameOpeningRef.current?.requestVersion === storedGameOpening.requestVersion) {
+        storedGameHydrationClient.current?.cancel('Saved game opening was superseded.')
+      }
+    }
+  }, [applyStoredGame, cancelStoredGameOpening, captureClockNow, getStoredGameHydrationClient, persistSuspendedActiveSession, storedGameOpening, tab])
+
+  useEffect(() => {
+    if (tab === 'play' || !storedGameOpening) return
+    cancelStoredGameOpening('Saved game opening was cancelled because you left Play.', true)
+  }, [cancelStoredGameOpening, storedGameOpening, tab])
+
+  useEffect(() => {
+    if (!storedGameOpening || tab !== 'play') return
+    // Workspace navigation also focuses the Play heading on its next frame.
+    // Focus the one actionable opening control one frame later so keyboard
+    // users land on Cancel rather than an inert board behind the shell.
+    let cancelFocusFrame: number | null = null
+    const frame = window.requestAnimationFrame(() => {
+      cancelFocusFrame = window.requestAnimationFrame(() => storedGameOpeningCancelButton.current?.focus())
+    })
+    return () => {
+      window.cancelAnimationFrame(frame)
+      if (cancelFocusFrame !== null) window.cancelAnimationFrame(cancelFocusFrame)
+    }
+  }, [storedGameOpening, tab])
+
   const onWindowKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (activeSessionRestoring) return
+    if (playTemporarilyBlocked) return
     if (event.key === 'Escape' && decision) {
       event.preventDefault()
       cancelDecision()
@@ -2422,6 +2612,11 @@ export default function App() {
     activeSessionRestoreVersion.current += 1
     activeSessionHydrationClient.current?.dispose()
     activeSessionHydrationClient.current = null
+    storedGameOpenVersion.current += 1
+    storedGameOpeningRef.current = null
+    storedGameOpeningItem.current = null
+    storedGameHydrationClient.current?.dispose()
+    storedGameHydrationClient.current = null
     retryHistoryRequestVersion.current += 1
     retryHistoryHydration.current = null
     retryHydrationClient.current?.dispose()
@@ -2452,20 +2647,24 @@ export default function App() {
   }, [cancelBrowserLibraryHydration, desktop, hydrateBrowserLibrary, libraryWorkspaceOpen, loadDesktopLibrary])
 
   useEffect(() => {
-    if (activeSessionRestoring) return
-    const session: ActiveSession = {
-      pgn: sharePgn, startFen, mode, botLevel, botProfileId, orientation, humanColor, colorChoice, timeControl, clock, clockHistory, termination,
-    }
+    if (playTemporarilyBlocked) return
     const persistence = getActiveSessionPersistence()
-    persistence.schedule(session)
+    persistence.schedule(activeSessionSnapshot)
     // A completed game is already a durable library record. Flush the active
     // session too, so closing immediately after a checkmate cannot lose its
     // final position while an idle callback is waiting.
     if (gameFinished) persistence.flush()
-  }, [activeSessionRestoring, game, startFen, mode, botLevel, botProfileId, orientation, humanColor, colorChoice, timeControl, clock, clockHistory, termination, sharePgn, gameFinished, databaseReady, getActiveSessionPersistence])
+  }, [playTemporarilyBlocked, activeSessionSnapshot, gameFinished, databaseReady, getActiveSessionPersistence])
 
   useEffect(() => {
-    const flush = () => activeSessionPersistence.current?.flush()
+    const flush = () => {
+      const suspended = suspendedActiveSession.current
+      if (suspended) {
+        activeSessionPersistRef.current(suspended)
+        return
+      }
+      activeSessionPersistence.current?.flush()
+    }
     const flushWhenHidden = () => {
       if (document.visibilityState === 'hidden') flush()
     }
@@ -2585,7 +2784,7 @@ export default function App() {
 
   useEffect(() => {
     const client = botClient.current
-    if (activeSessionRestoring
+    if (playTemporarilyBlocked
       || !client
       || !isBotTurn(mode, game.turn(), humanColor)
       || gameFinished
@@ -2708,7 +2907,7 @@ export default function App() {
         release?.()
       }
     }
-  }, [activeSessionRestoring, game, mode, humanColor, botColor, botLevel, botProfile, engineSettings, startFen, gameFinished, decision, clock, desktop, playMoveSound, captureClockNow, setGame, history, verbose])
+  }, [playTemporarilyBlocked, game, mode, humanColor, botColor, botLevel, botProfile, engineSettings, startFen, gameFinished, decision, clock, desktop, playMoveSound, captureClockNow, setGame, history, verbose])
 
   const abortedGameCount = useMemo(() => library.filter((item) => item.moveCount === 0).length, [library])
   const visibleLibrary = useMemo(() => {
@@ -2804,7 +3003,7 @@ export default function App() {
         <LiveGameDock visible={liveGameDockVisible} onReturnToGame={() => navigateTo('play')} />
 
         {tab === 'play' && (
-          <section className={`play-workspace ${activeSessionRestoring ? 'play-workspace--restoring' : ''}`} aria-busy={activeSessionRestoring || undefined}>
+          <section className={`play-workspace ${playTemporarilyBlocked ? 'play-workspace--restoring' : ''}`}>
             {activeSessionRestoring && (
               <div className="active-session-restore" role="status" aria-live="polite" aria-atomic="true">
                 <RefreshCw className="spin" size={20} aria-hidden="true" />
@@ -2817,7 +3016,17 @@ export default function App() {
                 <button className="secondary-button" type="button" onClick={startFreshInsteadOfRestore}>Start fresh instead</button>
               </div>
             )}
-            <div className="board-stage">
+            {storedGameOpeningInProgress && (
+              <div className="active-session-restore" role="status" aria-live="polite" aria-atomic="true">
+                <RefreshCw className="spin" size={20} aria-hidden="true" />
+                <div>
+                  <strong>Opening saved game</strong>
+                  <span>Setting up the board and complete move history locally. Your current game is paused until this finishes.</span>
+                </div>
+                <button ref={storedGameOpeningCancelButton} className="secondary-button" type="button" onClick={() => cancelStoredGameOpening('Player cancelled opening this saved game.', true)}>Cancel opening</button>
+              </div>
+            )}
+            <div className="board-stage" aria-busy={playTemporarilyBlocked || undefined} inert={playTemporarilyBlocked}>
               <div className="board-status">
                 <div className="board-status__summary">
                   <span
@@ -2896,7 +3105,7 @@ export default function App() {
               {transferNotice && <div className={`play-transfer-notice play-transfer-notice--${transferNotice.kind}`} role="status">{transferNotice.message}</div>}
             </div>
 
-            <aside className="game-panel">
+            <aside className="game-panel" aria-busy={playTemporarilyBlocked || undefined} inert={playTemporarilyBlocked}>
               <div className="game-panel__header">
                 <div className="panel-icon"><BrainCircuit size={22} /></div>
                 <div><span className="eyebrow">Current game</span><h2>{mode === 'bot' ? `Play ${opponentName} · ${humanSideLabel}` : 'Local match'}</h2></div>
