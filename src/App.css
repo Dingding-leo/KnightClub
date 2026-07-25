@@ -66,15 +66,23 @@ button { -webkit-tap-highlight-color: transparent; }
   gap: 30px;
 }
 
-.brand {
+.app-nav__identity {
   width: 100%;
-  padding: 5px 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 2px;
+}
+
+.brand {
+  min-width: 0;
+  padding: 5px 0;
   border: 0;
   border-radius: 12px;
   background: transparent;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
   text-align: left;
   cursor: pointer;
 }
@@ -93,8 +101,26 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .brand-copy { min-width: 0; display: grid; gap: 1px; }
-.brand-copy strong { font-size: 15px; letter-spacing: -.02em; }
+.brand-copy strong,
+.brand-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brand-copy strong { font-size: 14px; letter-spacing: -.04em; }
 .brand-copy small { color: var(--muted); font-size: 10px; }
+
+.sidebar-toggle {
+  width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover { border-color: var(--line); background: var(--surface-hover); color: var(--text); }
+.sidebar-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .app-nav nav { display: grid; gap: 6px; }
 
@@ -146,6 +172,25 @@ button { -webkit-tap-highlight-color: transparent; }
 .app-main {
   min-width: 0;
   padding: 22px clamp(18px, 3.2vw, 52px) 54px;
+}
+
+@media (min-width: 1241px) {
+  .app-shell { transition: grid-template-columns .18s ease; }
+  .app-main--play { padding-top: 12px; padding-bottom: 12px; }
+
+  .app-shell--sidebar-collapsed { grid-template-columns: 76px minmax(0, 1fr); }
+  .app-shell--sidebar-collapsed .app-nav { padding-right: 10px; padding-left: 10px; gap: 22px; }
+  .app-shell--sidebar-collapsed .app-nav__identity { grid-template-columns: 1fr; justify-items: center; gap: 7px; }
+  .app-shell--sidebar-collapsed .brand { width: 40px; padding: 0; }
+  .app-shell--sidebar-collapsed .brand-copy,
+  .app-shell--sidebar-collapsed .app-nav nav button > span,
+  .app-shell--sidebar-collapsed .privacy-badge > span { display: none; }
+  .app-shell--sidebar-collapsed .app-nav nav button { justify-content: center; padding-right: 0; padding-left: 0; gap: 0; }
+  .app-shell--sidebar-collapsed .privacy-badge { width: 40px; min-height: 40px; padding: 0; justify-content: center; gap: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell { transition: none; }
 }
 
 .page-header {
@@ -232,10 +277,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .live-game-dock button:hover { border-color: var(--accent); background: rgba(163, 214, 92, .2); }
 
 .play-workspace {
-  width: min(100%, 1220px);
+  width: min(100%, 1400px);
   margin: 0 auto;
   display: grid;
-  grid-template-columns: minmax(470px, 720px) minmax(320px, 382px);
+  grid-template-columns: minmax(360px, 1fr) minmax(330px, 400px);
   justify-content: center;
   align-items: start;
   gap: clamp(18px, 2.2vw, 28px);
@@ -271,11 +316,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .active-session-restore button { margin-left: auto; flex: 0 0 auto; }
 
 .board-stage {
-  /* The board is only useful when both player bars and the in-game actions
-     are visible. Reserve their full vertical footprint so Play is usable
-     without an initial page scroll on typical laptop screens. */
-  width: min(100%, 720px, max(360px, calc(100dvh - 272px)));
-  min-width: min(470px, max(360px, calc(100dvh - 272px)));
+  /* Desktop Play keeps every essential control on screen, then gives the
+     remaining height to the board instead of leaving it as bottom padding. */
+  width: min(100%, 760px, max(360px, calc(100dvh - 204px)));
+  min-width: 0;
   justify-self: end;
 }
 
@@ -627,6 +671,13 @@ button { -webkit-tap-highlight-color: transparent; }
 .board-toolbar button:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
 .board-toolbar button:disabled { opacity: .35; cursor: not-allowed; }
 
+@media (min-width: 1241px) {
+  .board-status { min-height: 30px; margin-bottom: 4px; }
+  .player-bar { min-height: 42px; }
+  .board-toolbar { margin-top: 5px; padding: 4px; }
+  .board-toolbar button { min-height: 36px; }
+}
+
 .play-transfer-notice {
   width: 100%;
   margin-top: 6px;
@@ -648,10 +699,12 @@ button { -webkit-tap-highlight-color: transparent; }
   border-radius: 17px;
   background: linear-gradient(165deg, rgba(34, 40, 34, .98), rgba(24, 29, 24, .98));
   box-shadow: 0 22px 56px rgba(0, 0, 0, .2);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
 }
@@ -664,6 +717,10 @@ button { -webkit-tap-highlight-color: transparent; }
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 11px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: linear-gradient(165deg, rgba(34, 40, 34, .99), rgba(29, 34, 29, .99));
 }
 
 .panel-icon,
@@ -1064,13 +1121,22 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
 .completion-actions button:last-child:hover:not(:disabled) { border-color: rgba(255, 139, 130, .32); color: var(--danger); }
 .completion-actions button:disabled { opacity: .35; cursor: not-allowed; }
 
+.game-panel > :not(.game-panel__moves) { flex: 0 0 auto; }
+
 .game-panel__moves {
-  min-height: 0;
+  min-height: 180px;
   padding: 15px 15px 8px;
-  flex: 1;
+  flex: 1 0 180px;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
+
+.game-panel__moves .section-heading { flex: 0 0 auto; }
+.game-panel__moves .move-list,
+.game-panel__moves .empty-state { flex: 1 1 auto; min-height: 0; }
+.game-panel__moves .move-list { overflow-x: hidden; overflow-y: auto; }
+.game-panel__moves .empty-state { padding: 14px 12px; }
 
 .section-heading {
   margin-bottom: 10px;
@@ -1927,7 +1993,9 @@ input:focus { border-color: rgba(163, 214, 92, .65); box-shadow: 0 0 0 3px rgba(
 @media (max-width: 1240px) {
   .app-shell { display: block; }
   .app-nav { position: sticky; height: auto; padding: 10px 16px; border-right: 0; border-bottom: 1px solid rgba(255, 255, 255, .075); display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 18px; }
-  .brand { width: auto; }
+  .app-nav__identity { width: auto; display: block; }
+  .brand { width: auto; padding-right: 6px; padding-left: 6px; }
+  .sidebar-toggle { display: none; }
   .brand-mark { width: 36px; height: 36px; }
   .app-nav nav { display: flex; justify-content: center; gap: 4px; }
   .app-nav nav button { min-height: 40px; padding: 0 11px; }

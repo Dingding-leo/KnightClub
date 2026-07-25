@@ -421,6 +421,18 @@ describe('bot player-side setup', () => {
     expect(markup).not.toContain('Choose a local opponent')
   })
 
+  it('keeps desktop navigation compactable without hiding its destinations', () => {
+    const markup = renderApp()
+
+    expect(markup).toContain('class="sidebar-toggle"')
+    expect(markup).toContain('aria-label="Collapse sidebar"')
+    expect(markup).toContain('aria-pressed="false"')
+    expect(markup).toContain('aria-label="Play"')
+    expect(markup).toContain('aria-label="Review"')
+    expect(markup).toContain('aria-label="Train"')
+    expect(markup).toContain('aria-current="page"')
+  })
+
   it('makes the first playable bot move explicit without changing side-neutral states', () => {
     const freshMarkup = renderApp()
 
@@ -598,7 +610,7 @@ describe('workspace handoff accessibility', () => {
   it('gives each primary workspace a labelled, focusable title target', () => {
     const markup = renderApp()
 
-    expect(markup).toContain('<main class="app-main" aria-labelledby="workspace-title">')
+    expect(markup).toContain('<main class="app-main app-main--play" aria-labelledby="workspace-title">')
     expect(markup).toContain('<h1 id="workspace-title" tabindex="-1">Play</h1>')
   })
 })

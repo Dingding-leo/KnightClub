@@ -15,6 +15,8 @@ import {
   Handshake,
   Library,
   Pause,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   RefreshCw,
   RotateCcw,
@@ -587,6 +589,7 @@ export default function App() {
   )
   const database = useMemo(() => desktop ? new DatabaseClient() : null, [desktop])
   const [tab, setTab] = useState<Tab>('play')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [game, setGameState] = useState(initial.game)
   const [startFen, setStartFen] = useState(initial.startFen)
   const [mode, setMode] = useState<GameMode>(initial.mode)
@@ -3038,18 +3041,33 @@ export default function App() {
 
   return (
     <ClockRuntime state={clock} gameFinished={gameFinished} onTick={captureClockNow} onFlag={handleClockFlag}>
-      <div className="app-shell">
+      <div className={sidebarCollapsed ? 'app-shell app-shell--sidebar-collapsed' : 'app-shell'}>
       <aside className="app-nav">
-        <button className="brand" type="button" onClick={() => navigateTo('play')} aria-label="KnightClub home">
-          <span className="brand-mark"><Swords size={23} strokeWidth={2.4} /></span>
-          <span className="brand-copy"><strong>KnightClub</strong><small>Chess studio</small></span>
-        </button>
+        <div className="app-nav__identity">
+          <button className="brand" type="button" onClick={() => navigateTo('play')} aria-label="KnightClub home">
+            <span className="brand-mark"><Swords size={23} strokeWidth={2.4} /></span>
+            <span className="brand-copy"><strong>KnightClub</strong><small>Chess studio</small></span>
+          </button>
+          <button
+            className="sidebar-toggle"
+            type="button"
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-pressed={sidebarCollapsed}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          </button>
+        </div>
         <nav aria-label="Primary navigation">
           {navItems.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               type="button"
               className={tab === id ? 'is-active' : ''}
+              aria-label={label}
+              aria-current={tab === id ? 'page' : undefined}
+              title={sidebarCollapsed ? label : undefined}
               onPointerEnter={() => preloadWorkspace(id)}
               onFocus={() => preloadWorkspace(id)}
               onClick={() => {
@@ -3073,7 +3091,7 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="app-main" aria-labelledby="workspace-title">
+      <main className={`app-main ${tab === 'play' ? 'app-main--play' : ''}`} aria-labelledby="workspace-title">
         <header className={`page-header ${tab === 'play' ? 'page-header--play sr-only' : ''}`}>
           <div>
             <span className="eyebrow">{meta.eyebrow}</span>
