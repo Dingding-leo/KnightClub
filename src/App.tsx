@@ -469,9 +469,10 @@ interface PlayerBarProps {
   botAvatar?: { initials: string; tone: BotProfileTone }
   thinking?: boolean
   paused: boolean
+  variant?: 'board' | 'rail'
 }
 
-function PlayerBar({ color, name, detail, active, isBot, botAvatar, thinking, paused }: PlayerBarProps) {
+function PlayerBar({ color, name, detail, active, isBot, botAvatar, thinking, paused, variant = 'board' }: PlayerBarProps) {
   const snapshot = useClockSnapshot()
   const chessColor: Color = color === 'white' ? 'w' : 'b'
   const remaining = chessColor === 'w' ? snapshot.whiteMs : snapshot.blackMs
@@ -480,7 +481,11 @@ function PlayerBar({ color, name, detail, active, isBot, botAvatar, thinking, pa
   const flagged = snapshot.flaggedColor === chessColor
   const Avatar = isBot ? Bot : CircleUserRound
   return (
-    <div className={`player-bar ${active ? 'player-bar--active' : ''}`}>
+    <div
+      className={`player-bar player-bar--${variant} ${active ? 'player-bar--active' : ''}`}
+      role="group"
+      aria-label={`${name}, ${color} player`}
+    >
       <div className={`player-avatar player-avatar--${color}${botAvatar ? ` player-avatar--${botAvatar.tone}` : ''}`}>
         {botAvatar ? <span aria-hidden="true">{botAvatar.initials}</span> : <Avatar size={20} strokeWidth={2.1} />}
       </div>
@@ -3213,6 +3218,31 @@ export default function App() {
               </div>
               {transferNotice && <div className={`play-transfer-notice play-transfer-notice--${transferNotice.kind}`} role="status">{transferNotice.message}</div>}
             </div>
+
+            <aside className="play-player-rail" aria-label="Players" aria-busy={playTemporarilyBlocked || undefined} inert={playTemporarilyBlocked}>
+              <PlayerBar
+                variant="rail"
+                color={topColor}
+                name={topPlayer.name}
+                detail={topPlayer.detail}
+                isBot={topPlayer.isBot}
+                botAvatar={topPlayer.botAvatar}
+                active={(clock.activeColor ?? clock.pausedColor) === (topColor === 'white' ? 'w' : 'b')}
+                thinking={thinking && topPlayer.isBot}
+                paused={Boolean(clock.pausedColor)}
+              />
+              <PlayerBar
+                variant="rail"
+                color={bottomColor}
+                name={bottomPlayer.name}
+                detail={bottomPlayer.detail}
+                isBot={bottomPlayer.isBot}
+                botAvatar={bottomPlayer.botAvatar}
+                active={(clock.activeColor ?? clock.pausedColor) === (bottomColor === 'white' ? 'w' : 'b')}
+                thinking={thinking && bottomPlayer.isBot}
+                paused={Boolean(clock.pausedColor)}
+              />
+            </aside>
 
             <aside className="game-panel" aria-busy={playTemporarilyBlocked || undefined} inert={playTemporarilyBlocked}>
               <div className="game-panel__header">

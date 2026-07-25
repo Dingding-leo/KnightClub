@@ -433,6 +433,14 @@ describe('bot player-side setup', () => {
     expect(markup).toContain('aria-current="page"')
   })
 
+  it('provides a wide-play player rail without removing the normal board bars', () => {
+    const markup = renderApp()
+
+    expect(markup).toContain('class="play-player-rail" aria-label="Players"')
+    expect(markup.match(/player-bar--rail/g)).toHaveLength(2)
+    expect(markup.match(/player-bar--board/g)).toHaveLength(2)
+  })
+
   it('makes the first playable bot move explicit without changing side-neutral states', () => {
     const freshMarkup = renderApp()
 
