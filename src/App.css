@@ -240,6 +240,60 @@ button { -webkit-tap-highlight-color: transparent; }
     scrollbar-width: thin;
   }
 
+  /* A training exercise is a focused, one-screen interaction. Let its board
+     take the height left after the source tabs and exercise heading instead
+     of retaining a width-driven 570px size that forces an extra scroll on
+     ordinary laptop viewports. Long explanatory copy can still scroll inside
+     its own side panel without moving the workspace. */
+  .app-main--train > .train-workspace {
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .app-main--train .train-workspace > [role="tabpanel"] { min-height: 0; }
+
+  .app-main--train .tactics-sprint,
+  .app-main--train .retry-queue {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-main--train .tactics-sprint {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .app-main--train .retry-queue {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    align-items: stretch;
+  }
+
+  .app-main--train .tactics-sprint__board,
+  .app-main--train .retry-queue__board {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: grid;
+    place-items: center;
+  }
+
+  .app-main--train .tactics-sprint__board > .board.board,
+  .app-main--train .retry-queue__board > .board.board {
+    inline-size: auto;
+    block-size: min(100%, 570px);
+    max-inline-size: 100%;
+    max-block-size: 100%;
+    justify-self: center;
+    align-self: center;
+  }
+
+  .app-main--train .tactics-sprint__panel,
+  .app-main--train .retry-queue__panel {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
   .app-shell--sidebar-collapsed { grid-template-columns: 76px minmax(0, 1fr); }
   .app-shell--sidebar-collapsed .app-nav { padding-right: 10px; padding-left: 10px; gap: 22px; }
   .app-shell--sidebar-collapsed .app-nav__identity { grid-template-columns: 1fr; justify-items: center; gap: 7px; }
