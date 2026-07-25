@@ -20,6 +20,7 @@ import {
   RotateCcw,
   Search,
   ShieldCheck,
+  SlidersHorizontal,
   Swords,
   Target,
   Trophy,
@@ -612,7 +613,9 @@ export default function App() {
   // inputs instead of re-rendering the full Play shell for every keypress.
   const customTimeDraft = useRef(customTimeDraftFor(initial.timeControl))
   const [customTimeOpen, setCustomTimeOpen] = useState(initial.timeControl.category === 'custom')
-  const [setupOpen, setSetupOpen] = useState(() => initial.game.history().length === 0)
+  // The default game is immediately playable. Keep the full setup one tap
+  // away instead of making a first-time player choose through every option.
+  const [setupOpen, setSetupOpen] = useState(false)
   const [selected, setSelected] = useState<Square | null>(null)
   const [promotion, setPromotion] = useState<Promotion | null>(null)
   const [premove, setPremove] = useState<QueuedPremove | null>(null)
@@ -668,10 +671,11 @@ export default function App() {
   const botClient = useRef<HybridEngineClient | null>(null)
   const verboseHistoryCache = useRef(new WeakMap<Chess, readonly Move[]>())
   const soundPlayer = useRef<GameSoundPlayer | null>(null)
+  const gameSetup = useRef<HTMLDetailsElement | null>(null)
   const clockNowRef = useRef(Date.now())
   const workspaceTitle = useRef<HTMLHeadingElement | null>(null)
   const previousWorkspace = useRef<Tab>('play')
-  const setupAutoCollapsed = useRef(initial.game.history().length > 0)
+  const setupAutoCollapsed = useRef(true)
   const premoveRef = useRef<QueuedPremove | null>(premove)
   const retryItemsRef = useRef(retryItems)
   const retryHistoryReady = useRef(false)
@@ -1012,10 +1016,17 @@ export default function App() {
     botClient.current?.releaseIdleBrowserRuntime()
   }, [])
 
-  const openFreshGameSetup = () => {
+  const openFreshGameSetup = useCallback(() => {
     setupAutoCollapsed.current = false
     setSetupOpen(true)
-  }
+  }, [])
+
+  const revealGameSetup = useCallback(() => {
+    openFreshGameSetup()
+    window.requestAnimationFrame(() => {
+      gameSetup.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    })
+  }, [openFreshGameSetup])
 
   const botRequestVersion = useRef(0)
   const engineProbeVersion = useRef(0)
@@ -1102,8 +1113,8 @@ export default function App() {
     setTimeControl(restored.timeControl); setClock(restored.clock)
     setClockHistory(restored.clockHistory); setTermination(restored.termination)
     setSelected(null); setPromotion(null); setDecision(null); setThinking(false)
-    setupAutoCollapsed.current = (knownVerbose?.length ?? 0) > 0
-    setSetupOpen(!setupAutoCollapsed.current)
+    setupAutoCollapsed.current = true
+    setSetupOpen(false)
     savedPosition.current = terminalSessionFingerprint(
       restored.game.fen(),
       restored.termination?.result ?? gameResult(restored.game),
@@ -1681,8 +1692,8 @@ export default function App() {
     setCustomTimeOpen(control.category === 'custom')
     setTimeControl(control); setClock(next.isGameOver() || restoredTermination ? pauseClock(restoredClock, now) : restoredClock)
     setClockHistory([]); setTermination(restoredTermination); setDecision(null)
-    setupAutoCollapsed.current = hydrated.verboseHistory.length > 0
-    setSetupOpen(!setupAutoCollapsed.current)
+    setupAutoCollapsed.current = true
+    setSetupOpen(false)
     setMode(item.mode); setHumanColor(restoredHumanColor); setColorChoice(restoredColorChoice)
     if (item.mode === 'bot') setOrientation(restoredHumanColor === 'w' ? 'white' : 'black')
     if (item.mode === 'bot') {
@@ -1740,6 +1751,24 @@ export default function App() {
     if (!soundsEnabledRef.current) return
     soundPlayer.current ??= new GameSoundPlayer()
     soundPlayer.current.play(event)
+  }, [])
+
+  const primeSound = useCallback(() => {
+    if (!soundsEnabledRef.current) return
+    soundPlayer.current ??= new GameSoundPlayer()
+    soundPlayer.current.prime()
+  }, [])
+
+  const toggleSounds = useCallback(() => {
+    const nextEnabled = !soundsEnabledRef.current
+    soundsEnabledRef.current = nextEnabled
+    setSoundsEnabled(nextEnabled)
+    if (nextEnabled) {
+      soundPlayer.current ??= new GameSoundPlayer()
+      soundPlayer.current.prime()
+      soundPlayer.current.play('move')
+    }
+    setNotice(nextEnabled ? 'Move sounds on.' : 'Move sounds off.')
   }, [])
 
   const playMoveSound = useCallback((next: Chess, move: Pick<Move, 'captured'>) => {
@@ -2075,11 +2104,13 @@ export default function App() {
   // repaint while still dispatching to the current game-state closures.
   playBoardHandlers.current = { onSquareClick: chooseSquare, onMoveAttempt: attemptMove }
   const onPlayBoardSquareClick = useCallback((square: Square) => {
+    primeSound()
     playBoardHandlers.current.onSquareClick(square)
-  }, [])
+  }, [primeSound])
   const onPlayBoardMoveAttempt = useCallback((from: Square, to: Square) => {
+    primeSound()
     playBoardHandlers.current.onMoveAttempt(from, to)
-  }, [])
+  }, [primeSound])
 
   const reset = () => {
     requestRestart(
@@ -3043,7 +3074,7 @@ export default function App() {
       </aside>
 
       <main className="app-main" aria-labelledby="workspace-title">
-        <header className={`page-header ${tab === 'play' ? 'page-header--play' : ''}`}>
+        <header className={`page-header ${tab === 'play' ? 'page-header--play sr-only' : ''}`}>
           <div>
             <span className="eyebrow">{meta.eyebrow}</span>
             <h1 ref={workspaceTitle} id="workspace-title" tabIndex={-1}>{meta.title}</h1>
@@ -3093,7 +3124,13 @@ export default function App() {
                   <strong>Material {formatEvaluation(previewMaterial)}</strong>
                 </div>
                 <div className="board-status__actions">
-                  <button className="icon-button" type="button" onClick={() => setOrientation(orientation === 'white' ? 'black' : 'white')} title="Flip board">
+                  <button className="icon-button board-quick-action" type="button" onClick={revealGameSetup} aria-controls="game-setup" aria-expanded={setupOpen} aria-label="Open game setup" title="Open game setup">
+                    <SlidersHorizontal size={18} /><span>Setup</span>
+                  </button>
+                  <button className="icon-button board-quick-action" type="button" onClick={toggleSounds} aria-pressed={soundsEnabled} aria-label={soundsEnabled ? 'Turn move sounds off' : 'Turn move sounds on'} title={soundsEnabled ? 'Turn move sounds off' : 'Turn move sounds on'}>
+                    {soundsEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}<span>Sound</span>
+                  </button>
+                  <button className="icon-button board-quick-action" type="button" onClick={() => setOrientation(orientation === 'white' ? 'black' : 'white')} aria-label="Flip board" title="Flip board">
                     <FlipHorizontal2 size={18} /><span>Flip</span>
                   </button>
                 </div>
@@ -3167,6 +3204,8 @@ export default function App() {
               </div>
 
               <details
+                ref={gameSetup}
+                id="game-setup"
                 className="game-setup"
                 open={setupOpen}
                 onToggle={(event) => {
@@ -3288,9 +3327,9 @@ export default function App() {
                       </div>
                     )}
                     <div className="game-preferences">
-                      <button type="button" className="preference-toggle" aria-pressed={soundsEnabled} onClick={() => setSoundsEnabled((enabled) => !enabled)}>
+                      <button type="button" className="preference-toggle" aria-pressed={soundsEnabled} onClick={toggleSounds}>
                         {soundsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-                        <span><strong>Move sounds</strong><small>{soundsEnabled ? 'On · original synthesized audio' : 'Off'}</small></span>
+                        <span><strong>Move sounds</strong><small>{soundsEnabled ? 'On · tactile board audio' : 'Off'}</small></span>
                       </button>
                     </div>
                   </div>
