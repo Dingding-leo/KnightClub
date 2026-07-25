@@ -51,7 +51,7 @@ Open the local address printed by Vite. The pinned Stockfish 18 Lite WebAssembly
 
 ### Website publishing
 
-The public project page remains [https://dingding-leo.github.io/KnightLab/](https://dingding-leo.github.io/KnightLab/), hosted from `Dingding-leo/Dingding-leo.github.io` under `public/KnightLab`. Its publisher builds the canonical `Dingding-leo/KnightClub` source with `KNIGHTCLUB_BASE=/KnightLab/` and copies `dist/client`; this preserves the existing public path even though the source repository is named KnightClub.
+The latest browser build is published directly from this repository at [https://dingding-leo.github.io/KnightClub/](https://dingding-leo.github.io/KnightClub/). Pushes to `main` build the PWA with `KNIGHTCLUB_BASE=/KnightClub/` and deploy `dist/client` through GitHub Pages.
 
 ### macOS desktop with Stockfish
 
