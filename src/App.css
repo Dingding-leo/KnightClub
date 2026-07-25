@@ -784,28 +784,33 @@ button { -webkit-tap-highlight-color: transparent; }
   .board-toolbar button { min-height: 36px; }
 }
 
-/* On genuinely wide Play screens, devote the quiet strip beside the board to
-   player context. This is deliberately independent of sidebar state: opening
-   navigation must not make the match harder to read. */
-@media (min-width: 1450px) {
-  .app-main--play { padding-right: 8px; }
+/* On wide desktop Play screens, reserve a real grid column for the two
+   players. The previous absolute-positioned rail derived its position from
+   the browser width, so opening the navigation could push it out of the main
+   workspace. Keeping all three columns in one grid makes the rail stable in
+   both sidebar states and gives the board the remaining usable width. */
+@media (min-width: 1400px) {
+  .app-main--play { padding-right: 8px; padding-left: 8px; }
 
   .play-workspace {
     --play-panel-width: 330px;
-    /* Keep an eight-pixel breathing gap between the rail and board even at
-       the lower edge of this desktop range. */
-    --play-board-size: min(780px, calc(100vw - 690px), max(360px, calc(100dvh - 116px)));
-    --play-rail-gap: 8px;
-    grid-template-columns: minmax(360px, 1fr) var(--play-panel-width);
+    /* At the common 1440px desktop size this remains compact, while wider
+       displays give names and engine detail room to breathe. */
+    --play-rail-width: clamp(132px, 8vw, 156px);
+    --play-layout-gap: clamp(12px, 1.4vw, 22px);
+    grid-template-columns: var(--play-rail-width) minmax(360px, 1fr) var(--play-panel-width);
+    gap: var(--play-layout-gap);
+    justify-content: center;
   }
 
   .play-player-rail {
-    position: absolute;
-    z-index: 2;
-    top: 0;
-    bottom: 0;
-    right: calc(var(--play-panel-width) + clamp(18px, 2.2vw, 28px) + var(--play-board-size) + var(--play-rail-gap));
-    width: 132px;
+    position: static;
+    z-index: auto;
+    grid-column: 1;
+    grid-row: 1;
+    width: 100%;
+    min-width: 0;
+    align-self: stretch;
     padding: 38px 0 51px;
     display: flex;
     flex-direction: column;
@@ -813,7 +818,16 @@ button { -webkit-tap-highlight-color: transparent; }
   }
 
   .board-stage {
-    width: min(100%, var(--play-board-size));
+    grid-column: 2;
+    grid-row: 1;
+    width: min(100%, 780px, max(360px, calc(100dvh - 116px)));
+    justify-self: center;
+  }
+
+  .game-panel {
+    grid-column: 3;
+    grid-row: 1;
+    width: var(--play-panel-width);
   }
 
   .board-stage > .player-bar--board { display: none; }
