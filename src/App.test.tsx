@@ -407,22 +407,18 @@ describe('bot player-side setup', () => {
     }
   })
 
-  it('presents accessible White, Black and Random choices for a fresh game', () => {
+  it('keeps fresh-game setup compact while making it immediately reachable', () => {
     const markup = renderApp()
 
-    expect(markup).toContain('<details class="game-setup" open="">')
+    expect(markup).toContain('<details id="game-setup" class="game-setup">')
+    expect(markup).not.toContain('<details id="game-setup" class="game-setup" open="">')
     expect(markup).toContain('Game setup')
     expect(markup).toContain('Rowan Pike · You: White')
-    expect(markup).toContain('aria-label="Play as"')
-    expect(markup).toContain('>White<')
-    expect(markup).toContain('>Black<')
-    expect(markup).toContain('>Random<')
-    expect(markup).toContain('You are White')
-    expect(markup).toContain('Clock starts with the opening move.')
-    expect(markup).toContain('Choose a local opponent')
-    expect(markup).toContain('Mira Vale')
-    expect(markup).toContain('Rowan Pike')
-    expect(markup).toContain('Nia Cross')
+    expect(markup).toContain('aria-controls="game-setup"')
+    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).toContain('aria-label="Open game setup"')
+    expect(markup).not.toContain('aria-label="Play as"')
+    expect(markup).not.toContain('Choose a local opponent')
   })
 
   it('makes the first playable bot move explicit without changing side-neutral states', () => {
@@ -510,8 +506,8 @@ describe('bot player-side setup', () => {
       colorChoice: 'white',
     })
 
-    expect(markup).toContain('<details class="game-setup">')
-    expect(markup).not.toContain('<details class="game-setup" open="">')
+    expect(markup).toContain('<details id="game-setup" class="game-setup">')
+    expect(markup).not.toContain('<details id="game-setup" class="game-setup" open="">')
     expect(markup).toContain('Rowan Pike · You: White')
     expect(markup).not.toContain('Choose a local opponent')
     expect(markup).toContain('aria-label="Game completion actions"')
@@ -530,15 +526,14 @@ describe('bot player-side setup', () => {
       colorChoice: 'random',
     })
 
-    expect(markup).toContain('Random draw · Black')
-    expect(markup).toContain('The draw resolved to Black. Start a new game to draw again.')
     expect(markup).toContain('You: Black')
     expect(markup).toContain('Playing Black')
     expect(markup).toContain('Premove mode: choose one black move while the bot thinks.')
     expect(markup).toContain('Rowan Pike')
+    expect(markup).not.toContain('aria-label="Play as"')
   })
 
-  it('keeps a restored custom control editable at its saved values', () => {
+  it('keeps a restored custom control discoverable without reopening setup', () => {
     const markup = renderApp({
       pgn: '',
       startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
@@ -557,10 +552,9 @@ describe('bot player-side setup', () => {
       },
     })
 
-    expect(markup).toContain('aria-label="Custom time control"')
-    expect(markup).toContain('min="0.1" max="1440" step="0.1" value="7"')
-    expect(markup).toContain('min="0" max="600" value="3"')
-    expect(markup).toContain('min="0" max="600" value="2"')
+    expect(markup).toContain('Custom · 7 min · +3 · 2s delay')
+    expect(markup).toContain('aria-controls="game-setup"')
+    expect(markup).not.toContain('aria-label="Custom time control"')
   })
 })
 
