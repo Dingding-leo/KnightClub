@@ -3096,7 +3096,7 @@ export default function App() {
         </div>
       </aside>
 
-      <main className={`app-main ${tab === 'play' ? 'app-main--play' : ''}`} aria-labelledby="workspace-title">
+      <main className={`app-main app-main--${tab}`} aria-labelledby="workspace-title">
         <header className={`page-header ${tab === 'play' ? 'page-header--play sr-only' : ''}`}>
           <div>
             <span className="eyebrow">{meta.eyebrow}</span>

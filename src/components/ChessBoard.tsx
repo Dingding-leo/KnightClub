@@ -118,6 +118,11 @@ const BoardSquare = memo(function BoardSquare({
     onSquareClick(square, event)
   }, [onSquareClick, square])
   const handlePointerStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    // A board square is an action target, not a document-navigation control.
+    // Prevent the native button focus on pointer input so a move does not make
+    // the browser scroll the page to keep the newly focused square visible.
+    // Keyboard activation still follows the normal focus behavior.
+    event.preventDefault()
     onPointerStart(square, canDrag, event)
   }, [canDrag, onPointerStart, square])
   const handleFocus = useCallback(() => {
@@ -188,6 +193,7 @@ function ChessBoardView({
   const files = orientation === 'white' ? whiteFiles : blackFiles
   const ranks = orientation === 'white' ? whiteRanks : blackRanks
   const activePointer = useRef<ActivePointer | null>(null)
+  const pointerScrollPosition = useRef<{ left: number; top: number } | null>(null)
   const suppressedSquares = useRef<Set<Square>>(new Set())
   const squareButtons = useRef(new Map<Square, HTMLButtonElement>())
   const latestCallbacks = useRef({ onSquareClick, onMoveAttempt })
@@ -209,6 +215,21 @@ function ChessBoardView({
 
   const dispatchMoveAttempt = useCallback((from: Square, to: Square) => {
     latestCallbacks.current.onMoveAttempt(from, to)
+  }, [])
+
+  const restorePointerScroll = useCallback(() => {
+    const position = pointerScrollPosition.current
+    pointerScrollPosition.current = null
+    if (!position || typeof window === 'undefined') return
+
+    // State updates can reflow the board and the side panel after the click
+    // handler returns. Restore on the next two frames so neither that reflow
+    // nor a late native scroll leaves the player lower on the page.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ left: position.left, top: position.top, behavior: 'auto' })
+      })
+    })
   }, [])
 
   const squareAtPointer = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -254,6 +275,9 @@ function ChessBoardView({
     canDrag: boolean,
     event: ReactPointerEvent<HTMLButtonElement>,
   ) => {
+    if (event.isPrimary && event.button === 0 && typeof window !== 'undefined') {
+      pointerScrollPosition.current = { left: window.scrollX, top: window.scrollY }
+    }
     if (!canDrag || !event.isPrimary || event.button !== 0 || activePointer.current) return
     activePointer.current = { id: event.pointerId, source: square, selectedForDrag: false }
     try {
@@ -282,10 +306,12 @@ function ChessBoardView({
 
     suppressPointerClick(pointer.source, target)
     dispatchMoveAttempt(pointer.source, target)
-  }, [clearPointer, dispatchMoveAttempt, squareAtPointer, suppressPointerClick])
+    restorePointerScroll()
+  }, [clearPointer, dispatchMoveAttempt, restorePointerScroll, squareAtPointer, suppressPointerClick])
 
   const cancelPointerMove = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     clearPointer(event)
+    pointerScrollPosition.current = null
   }, [clearPointer])
 
   const moveGridFocus = useCallback((square: Square, event: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -320,7 +346,8 @@ function ChessBoardView({
       return
     }
     dispatchSquareClick(square)
-  }, [dispatchSquareClick])
+    if (event.detail !== 0) restorePointerScroll()
+  }, [dispatchSquareClick, restorePointerScroll])
 
   const registerButton = useCallback((square: Square, element: HTMLButtonElement | null) => {
     if (element) squareButtons.current.set(square, element)
