@@ -725,12 +725,14 @@ button { -webkit-tap-highlight-color: transparent; }
 /* On genuinely wide Play screens, devote the quiet strip beside the board to
    player context. This is deliberately independent of sidebar state: opening
    navigation must not make the match harder to read. */
-@media (min-width: 1470px) {
+@media (min-width: 1450px) {
   .app-main--play { padding-right: 8px; }
 
   .play-workspace {
     --play-panel-width: 330px;
-    --play-board-size: min(780px, max(360px, calc(100dvh - 116px)));
+    /* Keep an eight-pixel breathing gap between the rail and board even at
+       the lower edge of this desktop range. */
+    --play-board-size: min(780px, calc(100vw - 690px), max(360px, calc(100dvh - 116px)));
     --play-rail-gap: 8px;
     grid-template-columns: minmax(360px, 1fr) var(--play-panel-width);
   }
