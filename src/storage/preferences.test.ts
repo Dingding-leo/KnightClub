@@ -24,4 +24,11 @@ describe('local preferences', () => {
       engine: { ...DEFAULT_PREFERENCES.engine, profile: 'elo', elo: 2050, threads: 3 },
     }).engine).toMatchObject({ profile: 'elo', elo: 2050, threads: 3 })
   })
+
+  it('keeps a known board theme and falls back to the default for missing or unknown values', () => {
+    expect(normalizePreferences({ boardTheme: 'walnut' }).boardTheme).toBe('walnut')
+    expect(normalizePreferences({ soundsEnabled: false }).boardTheme).toBe(DEFAULT_PREFERENCES.boardTheme)
+    expect(normalizePreferences({ boardTheme: 'neon' }).boardTheme).toBe(DEFAULT_PREFERENCES.boardTheme)
+    expect(normalizePreferences({ boardTheme: 4 }).boardTheme).toBe(DEFAULT_PREFERENCES.boardTheme)
+  })
 })

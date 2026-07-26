@@ -33,6 +33,7 @@ import {
 } from 'lucide-react'
 import './App.css'
 import { BotProfilePicker } from './components/BotProfilePicker'
+import { BoardThemePicker } from './components/BoardThemePicker'
 import { ChessBoard } from './components/ChessBoard'
 import { ClockRuntime } from './components/ClockRuntime'
 import { useClockSnapshot } from './components/clockRuntimeContext'
@@ -102,6 +103,7 @@ import {
 } from './domain/premove'
 import { GameSoundPlayer, type GameSoundEvent } from './audio/gameSounds'
 import { gameShortcutFor, promotionShortcutFor } from './domain/shortcuts'
+import { getBoardTheme } from './domain/boardThemes'
 import { copyText, downloadText } from './domain/textTransfer'
 import { positionTransferFor } from './domain/positionTransfer'
 import {
@@ -613,6 +615,7 @@ export default function App() {
   const [decision, setDecision] = useState<GameDecision | null>(null)
   const [soundsEnabled, setSoundsEnabled] = useState(initialPreferences.soundsEnabled)
   const [engineSettings, setEngineSettings] = useState(initialPreferences.engine)
+  const [boardTheme, setBoardTheme] = useState(initialPreferences.boardTheme)
   const [engineStatus, setEngineStatus] = useState<EngineStatus>(desktop
     ? { kind: 'idle', message: 'Loads on your first bot move or when you verify it.' }
     : { kind: 'idle', message: 'Loads locally on your first bot move or when you verify it.' })
@@ -2636,7 +2639,9 @@ export default function App() {
         if (!freshStartWasRequested && (activeSessionHydrationFailed || migratedActiveSessionFailed)) {
           setNotice('A saved game needs your attention before this fresh board can replace it.')
         }
-        setSoundsEnabled(preferences.soundsEnabled); setEngineSettings(preferences.engine)
+        setSoundsEnabled(preferences.soundsEnabled)
+        setEngineSettings(preferences.engine)
+        setBoardTheme(preferences.boardTheme)
         setLibraryLoadState(bootstrap.gameCount === 0 ? 'ready' : 'idle')
         // Retry work can be saved in browser storage while desktop hydration
         // is still running. Merge current React state as well as that mirror
@@ -2773,10 +2778,10 @@ export default function App() {
     // decided whether this is an empty-store migration. Otherwise the default
     // initial preferences could overwrite the legacy values before import.
     if (desktop && !databaseReady) return
-    const preferences = { soundsEnabled, engine: engineSettings, botProfileId }
+    const preferences = { soundsEnabled, engine: engineSettings, botProfileId, boardTheme }
     savePreferences(preferences)
     if (database && databaseReady) void database.savePreferences(preferences).catch(reportDatabaseError)
-  }, [soundsEnabled, engineSettings, botProfileId, database, databaseReady, desktop, reportDatabaseError])
+  }, [soundsEnabled, engineSettings, botProfileId, boardTheme, database, databaseReady, desktop, reportDatabaseError])
 
   useEffect(() => {
     const previous = previousWorkspace.current
@@ -3043,10 +3048,17 @@ export default function App() {
     gameFinished,
     clock,
   })
+  const activeBoardTheme = getBoardTheme(boardTheme)
 
   return (
     <ClockRuntime state={clock} gameFinished={gameFinished} onTick={captureClockNow} onFlag={handleClockFlag}>
-      <div className={sidebarCollapsed ? 'app-shell app-shell--sidebar-collapsed' : 'app-shell'}>
+      <div
+        className={sidebarCollapsed ? 'app-shell app-shell--sidebar-collapsed' : 'app-shell'}
+        style={{
+          '--board-light': activeBoardTheme.light,
+          '--board-dark': activeBoardTheme.dark,
+        } as React.CSSProperties}
+      >
       <aside className="app-nav">
         <div className="app-nav__identity">
           <button className="brand" type="button" onClick={() => navigateTo('play')} aria-label="KnightClub home">
@@ -3379,6 +3391,7 @@ export default function App() {
                         {soundsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
                         <span><strong>Move sounds</strong><small>{soundsEnabled ? 'On · tactile board audio' : 'Off'}</small></span>
                       </button>
+                      <BoardThemePicker value={boardTheme} onSelect={setBoardTheme} />
                     </div>
                   </div>
                 )}

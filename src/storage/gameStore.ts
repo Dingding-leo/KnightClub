@@ -11,6 +11,11 @@ import {
   normalizeEngineSettings,
   type EngineSettings,
 } from '../engine/engineSettings'
+import {
+  DEFAULT_BOARD_THEME_ID,
+  isBoardThemeId,
+  type BoardThemeId,
+} from '../domain/boardThemes'
 
 /** Browser mirror used before a desktop SQLite migration takes ownership. */
 export const LIBRARY_STORAGE_KEY = 'knightclub.game-library.v1'
@@ -89,12 +94,15 @@ export interface Preferences {
   soundsEnabled: boolean
   engine: EngineSettings
   botProfileId: BotProfileId
+  /** Board palette. Omitted by records saved before themes existed. */
+  boardTheme: BoardThemeId
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
   soundsEnabled: true,
   engine: DEFAULT_ENGINE_SETTINGS,
   botProfileId: DEFAULT_BOT_PROFILE_ID,
+  boardTheme: DEFAULT_BOARD_THEME_ID,
 }
 
 export function isHumanColor(value: unknown): value is HumanColor {
@@ -425,6 +433,9 @@ export function normalizePreferences(value: unknown): Preferences {
     botProfileId: isBotProfileId(preferences.botProfileId)
       ? preferences.botProfileId
       : DEFAULT_PREFERENCES.botProfileId,
+    boardTheme: isBoardThemeId(preferences.boardTheme)
+      ? preferences.boardTheme
+      : DEFAULT_PREFERENCES.boardTheme,
   }
 }
 
